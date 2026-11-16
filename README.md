@@ -32,7 +32,8 @@ API key, or `PEERIMETER_API_KEY` to be exported in the shell. The service binds
 to `127.0.0.1` by default for local development; the container image overrides
 this to `0.0.0.0`. `PEERIMETER_API_KEY` must be set to a high entropy secret
 outside local development. `PEERIMETER_DATA_FILE` defaults to
-`/var/lib/peerimeter/config.json` in the service, and
+`/var/lib/peerimeter/config.json` in the service; without direnv, set it to a
+writable path if that location is not writable by your local process. The
 `PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation and must be
 HTTPS.
 The network and node `PUT` bodies must be JSON objects with `"version": 1`.
