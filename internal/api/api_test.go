@@ -62,6 +62,32 @@ func TestNetworkAndNodeConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEmptyNodeIDCannotOverwriteNetworkConfig(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	put := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-static-key")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		return res
+	}
+
+	const networkBody = `{"version":1,"name":"network"}`
+	if res := put("/api/v1/networks/net-a/config", networkBody); res.Code != http.StatusNoContent {
+		t.Fatalf("PUT network status = %d: %s", res.Code, res.Body)
+	}
+	if res := put("/api/v1/networks/net-a/nodes//config", `{"version":1,"name":"node"}`); res.Code != http.StatusBadRequest {
+		t.Fatalf("PUT empty node ID status = %d, want 400: %s", res.Code, res.Body)
+	}
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/networks/net-a/config", nil)
+	get.Header.Set("Authorization", "Bearer test-static-key")
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, get)
+	if getRes.Code != http.StatusOK || getRes.Body.String() != networkBody {
+		t.Fatalf("network config after empty node ID PUT = %d %s, want %s", getRes.Code, getRes.Body, networkBody)
+	}
+}
+
 func TestJoinBundleCarriesStaticKey(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle", nil)

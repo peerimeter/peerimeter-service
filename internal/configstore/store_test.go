@@ -68,4 +68,10 @@ func TestGetMissingConfig(t *testing.T) {
 	if _, err := store.GetNode("missing", "missing"); err != ErrNotFound {
 		t.Fatalf("GetNode error = %v, want ErrNotFound", err)
 	}
+	if err := store.PutNetwork(context.Background(), "", []byte(`{"version":1}`)); err != ErrInvalidID {
+		t.Fatalf("PutNetwork with empty ID error = %v, want ErrInvalidID", err)
+	}
+	if err := store.PutNode(context.Background(), "network", "", []byte(`{"version":1}`)); err != ErrInvalidID {
+		t.Fatalf("PutNode with empty node ID error = %v, want ErrInvalidID", err)
+	}
 }

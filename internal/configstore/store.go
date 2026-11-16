@@ -10,7 +10,17 @@ import (
 	"sync"
 )
 
-var ErrNotFound = errors.New("configuration not found")
+var (
+	ErrNotFound  = errors.New("configuration not found")
+	ErrInvalidID = errors.New("network and node IDs must not be empty")
+)
+
+type operationKind uint8
+
+const (
+	operationNetwork operationKind = iota + 1
+	operationNode
+)
 
 type fileState struct {
 	Version  int                `json:"version"`
@@ -23,6 +33,7 @@ type network struct {
 }
 
 type write struct {
+	kind      operationKind
 	networkID string
 	nodeID    string
 	value     json.RawMessage
@@ -99,11 +110,17 @@ func (s *Store) GetNode(networkID, nodeID string) (json.RawMessage, error) {
 }
 
 func (s *Store) PutNetwork(ctx context.Context, id string, value json.RawMessage) error {
-	return s.submit(ctx, write{networkID: id, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
+	if id == "" {
+		return ErrInvalidID
+	}
+	return s.submit(ctx, write{kind: operationNetwork, networkID: id, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
 }
 
 func (s *Store) PutNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) error {
-	return s.submit(ctx, write{networkID: networkID, nodeID: nodeID, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
+	if networkID == "" || nodeID == "" {
+		return ErrInvalidID
+	}
+	return s.submit(ctx, write{kind: operationNode, networkID: networkID, nodeID: nodeID, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
 }
 
 func (s *Store) submit(ctx context.Context, op write) error {
@@ -151,13 +168,15 @@ func (s *Store) apply(op write) error {
 		next.Networks[id] = cloneNetwork(n)
 	}
 	n := next.Networks[op.networkID]
-	if op.nodeID == "" {
+	if op.kind == operationNetwork {
 		n.Config = append(json.RawMessage(nil), op.value...)
-	} else {
+	} else if op.kind == operationNode {
 		if n.Nodes == nil {
 			n.Nodes = make(map[string]json.RawMessage)
 		}
 		n.Nodes[op.nodeID] = append(json.RawMessage(nil), op.value...)
+	} else {
+		return fmt.Errorf("unknown config write operation")
 	}
 	next.Networks[op.networkID] = n
 	committed, err := s.persist(next)

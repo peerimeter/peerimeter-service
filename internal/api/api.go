@@ -107,6 +107,10 @@ func (a *API) writeConfig(w http.ResponseWriter, value json.RawMessage, err erro
 }
 
 func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
+	if chi.URLParam(r, "networkID") == "" {
+		writeError(w, http.StatusBadRequest, "networkID must not be empty")
+		return
+	}
 	value, err := readConfig(r)
 	if err == nil {
 		err = a.store.PutNetwork(r.Context(), chi.URLParam(r, "networkID"), value)
@@ -115,6 +119,10 @@ func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) putNode(w http.ResponseWriter, r *http.Request) {
+	if chi.URLParam(r, "networkID") == "" || chi.URLParam(r, "nodeID") == "" {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID must not be empty")
+		return
+	}
 	value, err := readConfig(r)
 	if err == nil {
 		err = a.store.PutNode(r.Context(), chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID"), value)
@@ -140,6 +148,10 @@ func readConfig(r *http.Request) (json.RawMessage, error) {
 
 func (a *API) writePutResult(w http.ResponseWriter, err error) {
 	if err != nil {
+		if errors.Is(err, configstore.ErrInvalidID) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeError(w, http.StatusRequestEntityTooLarge, "configuration exceeds 1 MiB")

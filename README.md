@@ -40,6 +40,7 @@ Use `GET`/`PUT /api/v1/networks/{networkID}/config` and
 config. Files are replaced atomically with mode `0600`. Writes are serialized
 inside one process; run a single service instance against each data file.
 
-Version tags (`v*`) publish `linux/amd64` and `linux/arm64` images to
+Only exact `vX.Y.Z` version tags, without prerelease suffixes such as `-rc1`,
+publish `linux/amd64` and `linux/arm64` images to
 `ghcr.io/peerimeter/peerimeter-service`. Pull requests build the image but do
 not publish it.
