@@ -14,14 +14,55 @@ import (
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 )
 
-func newTestAPI(t *testing.T, publicURL string) http.Handler {
+func newTestAPI(t *testing.T, publicURL string, corsAllowedOrigins ...string) http.Handler {
 	t.Helper()
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	return New("test-static-key", publicURL, store, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	return New("test-static-key", publicURL, store, slog.New(slog.NewJSONHandler(io.Discard, nil)), corsAllowedOrigins...)
+}
+
+func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example.test", "https://dashboard.example.test")
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/networks", nil)
+	preflight.Header.Set("Origin", "https://DASHBOARD.example.test:443")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	preflight.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, preflight)
+	if result.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS status = %d, want 204: %s", result.Code, result.Body)
+	}
+	if got := result.Header().Get("Access-Control-Allow-Origin"); got != "https://dashboard.example.test" {
+		t.Fatalf("allow-origin = %q", got)
+	}
+	if got := result.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, OPTIONS" {
+		t.Fatalf("allow-methods = %q", got)
+	}
+	if got := result.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type" {
+		t.Fatalf("allow-headers = %q", got)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	get.Header.Set("Origin", "https://dashboard.example.test")
+	getResult := httptest.NewRecorder()
+	handler.ServeHTTP(getResult, get)
+	if getResult.Code != http.StatusNoContent || getResult.Header().Get("Access-Control-Allow-Origin") != "https://dashboard.example.test" {
+		t.Fatalf("allowed-origin GET = %d, headers %v", getResult.Code, getResult.Header())
+	}
+}
+
+func TestCORSDoesNotAllowUnknownOrigin(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example.test", "https://dashboard.example.test")
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/networks", nil)
+	preflight.Header.Set("Origin", "https://untrusted.example.test")
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, preflight)
+	if result.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("untrusted origin was allowed: %v", result.Header())
+	}
 }
 
 func TestHealthIsUnauthenticatedAndConfigIsProtected(t *testing.T) {

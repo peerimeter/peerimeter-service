@@ -8,9 +8,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -34,15 +36,22 @@ type configStore interface {
 }
 
 type API struct {
-	key       string
-	publicURL string
-	store     configStore
-	logger    *slog.Logger
+	key            string
+	publicURL      string
+	store          configStore
+	logger         *slog.Logger
+	allowedOrigins map[string]bool
 }
 
-func New(key, publicURL string, store *configstore.Store, logger *slog.Logger) http.Handler {
-	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), store: store, logger: logger}
+func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, corsAllowedOrigins ...string) http.Handler {
+	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), store: store, logger: logger, allowedOrigins: make(map[string]bool)}
+	for _, raw := range corsAllowedOrigins {
+		if origin, err := normalizeOrigin(raw); err == nil {
+			a.allowedOrigins[origin] = true
+		}
+	}
 	r := chi.NewRouter()
+	r.Use(a.cors)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
@@ -58,6 +67,59 @@ func New(key, publicURL string, store *configstore.Store, logger *slog.Logger) h
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.putNode)
 	})
 	return r
+}
+
+func (a *API) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" || len(a.allowedOrigins) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Origin")
+		canonical, err := normalizeOrigin(origin)
+		if err != nil || !a.allowedOrigins[canonical] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Origin", canonical)
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	u, err := url.Parse(value)
+	if err != nil {
+		return "", errors.New("invalid CORS origin")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || strings.HasSuffix(u.Host, ":") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || value == "null" || strings.Contains(value, "*") {
+		return "", errors.New("invalid CORS origin")
+	}
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		parsedPort, parseErr := strconv.Atoi(port)
+		if parseErr != nil || parsedPort < 1 || parsedPort > 65535 {
+			return "", errors.New("invalid CORS origin port")
+		}
+		return scheme + "://" + net.JoinHostPort(host, port), nil
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return scheme + "://" + host, nil
 }
 
 type nodeRegistration struct {

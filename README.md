@@ -38,6 +38,13 @@ outside local development. `PEERIMETER_DATA_FILE` defaults to
 writable path if that location is not writable by your local process. The
 `PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation and must be
 HTTPS.
+`PEERIMETER_CORS_ALLOWED_ORIGINS` optionally enables browser access from a
+comma-separated allowlist of exact HTTP(S) origins, such as
+`https://dashboard.example.com,https://admin.example.com`. Values may include a
+port, but not a path, credentials, query, fragment, or wildcard. The service
+returns CORS headers only for listed origins and permits the API's `GET`,
+`POST`, and `PUT` requests with `Authorization` and `Content-Type` headers. Leave
+it empty to require the dashboard and API to share an origin.
 The network and node `PUT` bodies must be JSON objects with `"version": 1`.
 
 All API routes except `/healthz` require `Authorization: Bearer <key>`. The
