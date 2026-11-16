@@ -188,7 +188,7 @@ func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix, err := netip.ParsePrefix(request.CIDR)
-	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !prefix.Addr().IsPrivate() {
+	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !privateIPv4Prefix(prefix) {
 		writeError(w, http.StatusBadRequest, "cidr must be a canonical private IPv4 network between /8 and /30")
 		return
 	}
@@ -210,6 +210,16 @@ func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+func privateIPv4Prefix(prefix netip.Prefix) bool {
+	for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		block, _ := netip.ParsePrefix(raw)
+		if block.Contains(prefix.Addr()) && prefix.Bits() >= block.Bits() {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {

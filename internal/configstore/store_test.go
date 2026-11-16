@@ -125,6 +125,50 @@ func TestMigratesLegacyNodeDocumentsToSeparateYAMLFiles(t *testing.T) {
 	}
 }
 
+func TestYAMLNodePersistencePreservesLargeJSONIntegers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store, err := Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := json.RawMessage(`{"version":1,"revision":9007199254740993}`)
+	if err := store.PutNode(context.Background(), "net-a", "node-a", value); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetNode("net-a", "node-a")
+	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) {
+		t.Fatalf("reopened node = %s, err = %v", got, err)
+	}
+}
+
+func TestLegacyMigrationPreservesLargeJSONIntegers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{"version":1,"networks":{"net-a":{"config":{"version":1},"nodes":{"node-a":{"version":1,"revision":9007199254740993}}}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetNode("net-a", "node-a")
+	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) {
+		t.Fatalf("migrated node = %s, err = %v", got, err)
+	}
+}
+
 func TestCreateNetworkPersistsCIDRMetadataAndRejectsDuplicates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	store, err := Open(path, 2)
@@ -153,6 +197,17 @@ func TestCreateNetworkPersistsCIDRMetadataAndRejectsDuplicates(t *testing.T) {
 	_ = json.Unmarshal(body, &expected)
 	if err != nil || !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("network metadata = %s, err = %v", got, err)
+	}
+}
+
+func TestCreateNetworkRejectsCIDRThatCrossesPrivateBlock(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.CreateNetwork(context.Background(), "mesh-a", json.RawMessage(`{"version":1,"id":"mesh-a","name":"Mesh","cidr":"192.168.0.0/15"}`)); err != ErrInvalidNetwork {
+		t.Fatalf("cross-boundary CIDR error = %v, want ErrInvalidNetwork", err)
 	}
 }
 
