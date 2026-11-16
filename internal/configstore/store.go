@@ -467,10 +467,20 @@ func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
 		return netip.Prefix{}, err
 	}
 	prefix, err := netip.ParsePrefix(metadata.CIDR)
-	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !prefix.Addr().IsPrivate() {
+	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !privateIPv4Prefix(prefix) {
 		return netip.Prefix{}, ErrInvalidNetwork
 	}
 	return prefix, nil
+}
+
+func privateIPv4Prefix(prefix netip.Prefix) bool {
+	for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		block, _ := netip.ParsePrefix(raw)
+		if block.Contains(prefix.Addr()) && prefix.Bits() >= block.Bits() {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneNetwork(n network) network {
@@ -550,7 +560,7 @@ func (s *Store) persistRegistration(networkID, nodeID string, value json.RawMess
 
 func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessage) (bool, error) {
 	var document any
-	if err := json.Unmarshal(value, &document); err != nil {
+	if err := yaml.Unmarshal(value, &document); err != nil {
 		return false, fmt.Errorf("decode node config: %w", err)
 	}
 	data, err := yaml.Marshal(document)

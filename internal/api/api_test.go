@@ -104,7 +104,7 @@ func TestCreateAndListNetworkWithWireGuardCIDR(t *testing.T) {
 
 func TestCreateNetworkRejectsInvalidCIDR(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
-	for _, cidr := range []string{"10.90.0.1/24", "8.8.8.0/24", "10.0.0.0/7", "10.90.0.0/31", "2001:db8::/64", "garbage"} {
+	for _, cidr := range []string{"10.90.0.1/24", "8.8.8.0/24", "10.0.0.0/7", "192.168.0.0/15", "10.90.0.0/31", "2001:db8::/64", "garbage"} {
 		body := `{"version":1,"id":"net-auto","name":"automesh","cidr":"` + cidr + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-static-key")
