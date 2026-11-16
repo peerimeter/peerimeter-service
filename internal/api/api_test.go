@@ -116,6 +116,17 @@ func TestCreateNetworkRejectsInvalidCIDR(t *testing.T) {
 	}
 }
 
+func TestPutNodeAcceptsJSONDuplicateKeys(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-auto/nodes/node-a/config", strings.NewReader(`{"version":1,"name":"old","name":"new"}`))
+	req.Header.Set("Authorization", "Bearer test-static-key")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("PUT duplicate-key node = %d %s", res.Code, res.Body)
+	}
+}
+
 func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-auto","name":"automesh","cidr":"10.90.0.0/24"}`))
