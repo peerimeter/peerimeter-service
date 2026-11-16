@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#090711">
+<meta name="description" content="Set up the Peerimeter Service API from source or as a Docker container.">
+<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/peerimeter/.github/main/assets/peerimeter-icon.png">
+<title>Peerimeter Service — Setup</title>
+<style>
+:root{color-scheme:dark;--bg:#090711;--line:#292238;--text:#f7f3ff;--muted:#aaa3bc;--pink:#ff2d91;--purple:#a833ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -30%,#35134c 0,transparent 55%),var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,Segoe UI,sans-serif}a{color:#e3a3ff}a:hover{color:white}.wrap{width:min(100% - 36px,920px);margin:auto}header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:24px 0;border-bottom:1px solid var(--line)}header img{display:block;width:min(270px,60vw);height:auto}header nav{display:flex;gap:18px;font-size:.9rem}header nav a{text-decoration:none}.hero{padding:66px 0 38px}.eyebrow{color:#d7b4ef;font-size:.78rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase}h1{max-width:760px;margin:10px 0 16px;font-size:clamp(2.4rem,7vw,4.7rem);line-height:1.04;letter-spacing:-.05em}h1 span{background:linear-gradient(100deg,var(--pink),#f35dce,var(--purple));color:transparent;background-clip:text}h2{margin:0 0 10px;font-size:1.55rem;letter-spacing:-.02em}h3{margin:24px 0 8px;font-size:1.05rem}p{margin:10px 0}.lead,.muted{color:var(--muted)}.lead{max-width:720px;font-size:1.13rem}.buttons{display:flex;flex-wrap:wrap;gap:11px;margin-top:24px}.button{display:inline-block;padding:10px 16px;border:1px solid #54336d;border-radius:10px;background:#20152d;color:white;text-decoration:none;font-weight:650}.button.primary{border:0;background:linear-gradient(100deg,#ed218a,#8d35e8)}.notice{margin:0 0 20px;padding:16px 18px;border:1px solid #59422b;border-left:3px solid #ffb454;border-radius:10px;background:#211a16;color:#e7d7c6}.section{margin:20px 0;padding:25px;border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#151220,#100e18)}.steps{padding-left:22px}.steps li{margin:12px 0;padding-left:4px}pre{overflow:auto;margin:12px 0 18px;padding:15px;border:1px solid #302840;border-radius:9px;background:#09080e;color:#f2ddff;font:.86rem/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.callout{margin:14px 0;padding:13px 15px;border:1px solid #302840;border-radius:9px;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}.mini{padding:16px;border:1px solid #302840;border-radius:10px;background:#0d0b14}.mini strong{display:block;margin-bottom:4px}footer{margin-top:42px;padding:22px 0 36px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}@media(max-width:600px){header{align-items:flex-start;flex-direction:column}.hero{padding-top:44px}.section{padding:19px}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><div class="wrap">
+<header><a href="https://peerimeter.app/" aria-label="Peerimeter home"><img src="https://raw.githubusercontent.com/peerimeter/.github/main/assets/peerimeter-logo.png" alt="Peerimeter"></a><nav aria-label="Main navigation"><a href="#source-setup">From source</a><a href="#docker">Docker</a><a href="https://github.com/peerimeter/peerimeter-service">Source</a></nav></header>
+<main>
+<section class="hero"><div class="eyebrow">Peerimeter control plane</div><h1>Host the API.<br><span>Keep control of your config.</span></h1><p class="lead">Peerimeter Service is a small Go HTTP API for storing and exchanging network and node configuration with Peerimeter agents. Run it from source for a quick start, or deploy the multi-architecture container with Docker Compose.</p><div class="buttons"><a class="button primary" href="#docker">Docker setup</a><a class="button" href="#source-setup">Run from source</a><a class="button" href="https://github.com/peerimeter/peerimeter-service">View source</a></div></section>
+<aside class="notice"><strong>Before exposing the API:</strong> use a unique high-entropy API key and terminate HTTPS at a trusted reverse proxy. The current API uses one shared static key for all networks and nodes; it has no per-agent permissions or user accounts. Run one service instance for each data file.</aside>
+<section id="source-setup" class="section"><h2>Simple setup: run from source</h2><p class="muted">This starts the service in the foreground on the local machine. It is useful for a small single-host installation or for trying the API.</p>
+<ol class="steps"><li>Install the Go version listed in the repository’s <a href="https://github.com/peerimeter/peerimeter-service/blob/main/.go-version">.go-version</a>, then clone the repository.</li></ol>
+<pre>git clone https://github.com/peerimeter/peerimeter-service.git
+cd peerimeter-service
+go build -trimpath -o peerimeter-service ./cmd/peerimeter-service</pre>
+<ol class="steps" start="2"><li>Set a unique key, the persistent JSON file path, and the public HTTPS URL agents will use. The data directory is created when the service first saves configuration.</li></ol>
+<pre>install -d -m 700 "$HOME/.local/share/peerimeter"
+export PEERIMETER_API_KEY="$(openssl rand -hex 32)"
+export PEERIMETER_DATA_FILE="$HOME/.local/share/peerimeter/config.json"
+export PEERIMETER_PUBLIC_API_URL="https://service.example.com"
+./peerimeter-service</pre>
+<div class="callout">Keep the API key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
+<h3>Check the service</h3><pre>curl --fail https://service.example.com/healthz
+curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+  https://service.example.com/api/v1/join-bundle</pre>
+<p class="muted">Agents can use <code>config pull</code> and <code>config push</code> to exchange network and node config files. This is explicit, one-shot transfer; the service does not automatically reconcile agent runtime state.</p></section>
+<section id="docker" class="section"><h2>Docker Compose setup</h2><p class="muted">The published image targets Linux amd64 and arm64 and runs as the unprivileged <code>app</code> user (UID/GID 1000). Select a versioned image tag from the service’s <a href="https://github.com/peerimeter/peerimeter-service/releases">GitHub releases</a>.</p>
+<ol class="steps"><li>Create a deployment directory, persistent data directory, and environment file.</li></ol>
+<pre>mkdir -p peerimeter-service/data
+cd peerimeter-service
+install -d -o 1000 -g 1000 data
+umask 077
+cat &gt; .env &lt;&lt;'EOF'
+SERVICE_IMAGE_TAG=replace-with-a-release-tag
+PEERIMETER_API_KEY=replace-with-a-unique-random-secret
+PEERIMETER_PUBLIC_API_URL=https://service.example.com
+EOF
+chmod 600 .env</pre>
+<p>Generate a key with <code>openssl rand -hex 32</code> and replace the example value. Choose an image tag published for a service release.</p>
+<ol class="steps" start="2"><li>Save this as <code>compose.yaml</code> alongside the environment file.</li></ol>
+<pre>services:
+  peerimeter-service:
+    image: ghcr.io/peerimeter/peerimeter-service:${SERVICE_IMAGE_TAG:?Set a released SERVICE_IMAGE_TAG in .env}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PEERIMETER_DATA_FILE: /var/lib/peerimeter/config.json
+      PEERIMETER_LISTEN_ADDR: 0.0.0.0
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/var/lib/peerimeter
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true</pre>
+<ol class="steps" start="3"><li>Pull and start the service. Configure your HTTPS reverse proxy to forward to <code>127.0.0.1:8080</code>.</li></ol>
+<pre>docker compose pull
+docker compose up -d
+docker compose logs -f peerimeter-service</pre>
+<div class="grid"><div class="mini"><strong>Persistent data</strong><span class="muted">Back up <code>./data/config.json</code>. The file contains the network and node configurations managed by the service.</span></div><div class="mini"><strong>Network exposure</strong><span class="muted">The published port is bound to host loopback. Do not expose the service directly to the internet without HTTPS and an access boundary you trust.</span></div></div></section>
+<section class="section"><h2>What the initial service provides</h2><div class="grid"><div class="mini"><strong>HTTP API</strong><span class="muted">Authenticated pull and push endpoints for network and node JSON configuration.</span></div><div class="mini"><strong>Single-file storage</strong><span class="muted">Writes are serialized in memory and replace the JSON data file atomically within one process.</span></div><div class="mini"><strong>Shared credential</strong><span class="muted">The join bundle carries the API URL and the service-wide static API key.</span></div><div class="mini"><strong>Single instance</strong><span class="muted">PostgreSQL, MQTT coordination, user accounts, per-agent authorization, and multi-instance locking are not included.</span></div></div><p>Read the <a href="https://github.com/peerimeter/peerimeter-service/blob/main/README.md">service README</a> for the API contract, or visit the <a href="https://peerimeter.app/">Peerimeter project site</a>.</p></section>
+</main>
+<footer>Peerimeter Service is open source. <a href="https://github.com/peerimeter/peerimeter-service">Service source</a> · <a href="https://github.com/peerimeter/peerimeter-agent">Agent source</a> · <a href="https://peerimeter.app/">Project home</a></footer>
+</div></body></html>

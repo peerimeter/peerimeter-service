@@ -8,6 +8,7 @@ This is the independent `peerimeter-service` Go repository. The sibling `../.git
 - `internal/`: API, authentication, configuration storage, and service lifecycle.
 - `.github/workflows/`: service CI and GHCR release pipeline.
 - `Dockerfile`: multi-stage production image.
+- `docs/index.html` and `docs/CNAME`: public setup guide for source and Docker deployments at `service.peerimeter.app`.
 
 ## Development
 
