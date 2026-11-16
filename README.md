@@ -77,6 +77,9 @@ JSON file are migrated to this layout at startup. An authenticated
 node documents as `{ "version": 1, "peers": { "node-id": { ... } } }`. This
 endpoint is only a document exchange primitive: it does not enroll or
 authenticate individual devices, discover endpoints, or establish tunnels.
+The authenticated dashboard can request
+`GET /api/v1/networks/{networkID}/peers` to list all registered node documents
+in that network without a node-specific self ID.
 `PUT /api/v1/networks/{networkID}/nodes/{nodeID}/registration` accepts a v1
 node report (`public_key`, `listen_port`, `primary_interface`,
 `local_addresses`, and optional `public_endpoint`). For a network created with
