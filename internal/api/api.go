@@ -261,7 +261,21 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-func (a *API) joinBundle(w http.ResponseWriter, _ *http.Request) {
+func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
+	networkID := r.URL.Query().Get("network_id")
+	if !validID(networkID) {
+		writeError(w, http.StatusBadRequest, "network_id query parameter is required and must be valid")
+		return
+	}
+	if _, err := a.store.GetNetworkMetadata(networkID); err != nil {
+		if errors.Is(err, configstore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "network not found")
+		} else {
+			a.logger.Error("check join bundle network", "error", err)
+			writeError(w, http.StatusInternalServerError, "could not create join bundle")
+		}
+		return
+	}
 	u, err := url.Parse(a.publicURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		writeError(w, http.StatusServiceUnavailable, "public HTTPS API URL is not configured")
@@ -270,8 +284,9 @@ func (a *API) joinBundle(w http.ResponseWriter, _ *http.Request) {
 	data, err := json.Marshal(struct {
 		Version         int    `json:"version"`
 		APIURL          string `json:"api_url"`
+		NetworkID       string `json:"network_id"`
 		EnrollmentToken string `json:"enrollment_token"`
-	}{Version: 1, APIURL: a.publicURL, EnrollmentToken: a.key})
+	}{Version: 1, APIURL: a.publicURL, NetworkID: networkID, EnrollmentToken: a.key})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create join bundle")
 		return
