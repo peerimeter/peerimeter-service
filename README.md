@@ -2,7 +2,9 @@
 
 The Peerimeter control-plane API. This repository is independent from
 [`peerimeter-agent`](https://github.com/peerimeter/peerimeter-agent) and owns the
-versioned HTTP/JSON contract consumed by agents.
+versioned HTTP/JSON contract consumed by agents. See the [setup guide](https://service.peerimeter.app/)
+for running the service from source or with Docker Compose. The documentation
+is also published from this repository’s `docs/` directory through GitHub Pages.
 
 ## Status
 
