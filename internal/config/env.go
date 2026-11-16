@@ -11,6 +11,7 @@ import (
 type Config struct {
 	APIKey       string `env:"PEERIMETER_API_KEY,required"`
 	DataFile     string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
+	ListenAddr   string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
 	PublicAPIURL string `env:"PEERIMETER_PUBLIC_API_URL"`
 	Port         string `env:"PORT" envDefault:"8080"`
 }

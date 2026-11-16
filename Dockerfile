@@ -22,6 +22,7 @@ COPY --from=build /out/group /etc/group
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build --chown=1000:1000 /var/lib/peerimeter /var/lib/peerimeter
 USER app
+ENV PEERIMETER_LISTEN_ADDR=0.0.0.0
 EXPOSE 8080
 VOLUME ["/var/lib/peerimeter"]
 ENTRYPOINT ["/peerimeter-service"]
