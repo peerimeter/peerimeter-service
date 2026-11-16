@@ -138,10 +138,13 @@ func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
 		handler.ServeHTTP(res, req)
 		return res
 	}
-	for nodeID, public := range map[string]string{"node-a": key(1), "node-b": key(2)} {
-		res := register(nodeID, public)
+	for _, node := range []struct {
+		id  string
+		key string
+	}{{"node-a", key(1)}, {"node-b", key(2)}} {
+		res := register(node.id, node.key)
 		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"tunnel_address":"10.90.0.`) {
-			t.Fatalf("register %s = %d %s", nodeID, res.Code, res.Body)
+			t.Fatalf("register %s = %d %s", node.id, res.Code, res.Body)
 		}
 	}
 	first := register("node-a", key(1))
