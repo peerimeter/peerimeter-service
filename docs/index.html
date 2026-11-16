@@ -27,7 +27,11 @@ export PEERIMETER_PUBLIC_API_URL="https://service.example.com"
 ./peerimeter-service &gt; service.log 2&gt;&amp;1 &amp;
 SERVICE_PID=$!
 trap 'kill "$SERVICE_PID"' EXIT
-curl --fail http://127.0.0.1:8080/healthz
+for attempt in $(seq 1 30); do
+  curl --fail --silent http://127.0.0.1:8080/healthz &gt;/dev/null &amp;&amp; break
+  sleep 1
+done
+curl --fail http://127.0.0.1:8080/healthz || { echo "Service did not become ready; see service.log" &gt;&amp;2; cat service.log; exit 1; }
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
   http://127.0.0.1:8080/api/v1/join-bundle</pre>
 <div class="callout">The example starts the service in the background so the same shell retains the API key for the local checks. Keep the key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
