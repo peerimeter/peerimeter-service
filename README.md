@@ -40,7 +40,10 @@ Use `GET`/`PUT /api/v1/networks/{networkID}/config` and
 config. Files are replaced atomically with mode `0600`. Writes are serialized
 inside one process; run a single service instance against each data file.
 
-Only exact `vX.Y.Z` version tags, without prerelease suffixes such as `-rc1`,
-publish `linux/amd64` and `linux/arm64` images to
-`ghcr.io/peerimeter/peerimeter-service`. Pull requests build the image but do
-not publish it.
+Pull requests build the image but do not publish it. On `main`, Conventional
+Commit messages determine whether a release is due: `feat` increments minor,
+`fix` and related patch types increment patch, and `BREAKING CHANGE` increments
+major. A release run publishes both `vX.Y.Z` and `X.Y.Z` tags for
+`linux/amd64` and `linux/arm64` at
+`ghcr.io/peerimeter/peerimeter-service`. The first main run seeds `v0.0.0` as
+the history baseline; commits without a version bump do not publish an image.
