@@ -27,13 +27,22 @@ export PEERIMETER_PUBLIC_API_URL="https://service.example.com"
 ./peerimeter-service &gt; service.log 2&gt;&amp;1 &amp;
 SERVICE_PID=$!
 trap 'kill "$SERVICE_PID"' EXIT
+SERVICE_READY=0
 for attempt in $(seq 1 30); do
-  curl --fail --silent http://127.0.0.1:8080/healthz &gt;/dev/null &amp;&amp; break
+  if curl --max-time 1 --fail --silent http://127.0.0.1:8080/healthz &gt;/dev/null; then
+    SERVICE_READY=1
+    break
+  fi
   sleep 1
 done
-curl --fail http://127.0.0.1:8080/healthz || { echo "Service did not become ready; see service.log" &gt;&amp;2; cat service.log; exit 1; }
-curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
-  http://127.0.0.1:8080/api/v1/join-bundle</pre>
+if [ "$SERVICE_READY" -eq 1 ]; then
+  curl --max-time 2 --fail http://127.0.0.1:8080/healthz
+  curl --max-time 5 --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+    http://127.0.0.1:8080/api/v1/join-bundle
+else
+  echo "Service did not become ready; see service.log" &gt;&amp;2
+  cat service.log
+fi</pre>
 <div class="callout">The example starts the service in the background so the same shell retains the API key for the local checks. Keep the key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
 <h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
