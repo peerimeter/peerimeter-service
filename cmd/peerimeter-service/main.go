@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,7 +32,7 @@ func main() {
 	defer store.Close()
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              net.JoinHostPort(cfg.ListenAddr, cfg.Port),
 		Handler:           api.New(cfg.APIKey, cfg.PublicAPIURL, store, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

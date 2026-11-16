@@ -24,10 +24,14 @@ make run
 
 `make env` copies `.env.example` to `.env` if `.env` does not already exist. The
 `.envrc` loads `.env` when using [direnv](https://direnv.net/); approve it once
-with `direnv allow`. `.env` is ignored by Git. Edit it for local development;
+with `direnv allow` and run the commands with direnv active. `.env` is ignored
+by Git. Edit it for local development;
 the example API key is not suitable for deployment. The `.env` defaults include
-`CGO_ENABLED=0` and `PORT=8080`. `PEERIMETER_API_KEY` must be set to a high
-entropy secret outside local development. `PEERIMETER_DATA_FILE` defaults to
+`CGO_ENABLED=0` and `PORT=8080`. `make run` requires direnv to load the local
+API key, or `PEERIMETER_API_KEY` to be exported in the shell. The service binds
+to `127.0.0.1` by default for local development; the container image overrides
+this to `0.0.0.0`. `PEERIMETER_API_KEY` must be set to a high entropy secret
+outside local development. `PEERIMETER_DATA_FILE` defaults to
 `/var/lib/peerimeter/config.json` in the service, and
 `PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation and must be
 HTTPS.
