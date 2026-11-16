@@ -160,6 +160,12 @@ jobs:
             --push .
       - name: Create version tag and GitHub release
         run: |
-          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f ref="refs/tags/$VERSION_TAG" -f sha="$GITHUB_SHA"
-          gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
+          if EXISTING_TAG="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION_TAG" --jq .object.sha 2>/dev/null)"; then
+            [[ "$EXISTING_TAG" == "$GITHUB_SHA" ]]
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$VERSION_TAG" -f sha="$GITHUB_SHA"
+          fi
+          if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+            gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
+          fi
