@@ -24,9 +24,14 @@ go build -trimpath -o peerimeter-service ./cmd/peerimeter-service</pre>
 export PEERIMETER_API_KEY="$(openssl rand -hex 32)"
 export PEERIMETER_DATA_FILE="$HOME/.local/share/peerimeter/config.json"
 export PEERIMETER_PUBLIC_API_URL="https://service.example.com"
-./peerimeter-service</pre>
-<div class="callout">Keep the API key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
-<h3>Check the service</h3><pre>curl --fail https://service.example.com/healthz
+./peerimeter-service &gt; service.log 2&gt;&amp;1 &amp;
+SERVICE_PID=$!
+trap 'kill "$SERVICE_PID"' EXIT
+curl --fail http://127.0.0.1:8080/healthz
+curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+  http://127.0.0.1:8080/api/v1/join-bundle</pre>
+<div class="callout">The example starts the service in the background so the same shell retains the API key for the local checks. Keep the key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
+<h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
   https://service.example.com/api/v1/join-bundle</pre>
 <p class="muted">Agents can use <code>config pull</code> and <code>config push</code> to exchange network and node config files. This is explicit, one-shot transfer; the service does not automatically reconcile agent runtime state.</p></section>
@@ -34,7 +39,7 @@ curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
 <ol class="steps"><li>Create a deployment directory, persistent data directory, and environment file.</li></ol>
 <pre>mkdir -p peerimeter-service/data
 cd peerimeter-service
-install -d -o 1000 -g 1000 data
+sudo install -d -o 1000 -g 1000 data
 umask 077
 cat &gt; .env &lt;&lt;'EOF'
 SERVICE_IMAGE_TAG=replace-with-a-release-tag
@@ -42,7 +47,7 @@ PEERIMETER_API_KEY=replace-with-a-unique-random-secret
 PEERIMETER_PUBLIC_API_URL=https://service.example.com
 EOF
 chmod 600 .env</pre>
-<p>Generate a key with <code>openssl rand -hex 32</code> and replace the example value. Choose an image tag published for a service release.</p>
+<p>Generate a key with <code>openssl rand -hex 32</code> and replace the example value. Choose an image tag published for a service release. The ownership command assumes rootful Docker. With rootless Docker, assign the data directory to the host IDs mapped to container UID/GID 1000: add 999 to the first subordinate UID in <code>/etc/subuid</code> and the first subordinate GID in <code>/etc/subgid</code> for your user. With Docker’s <code>userns-remap</code>, add 1000 to the first subordinate UID and GID values configured for the remapped user.</p>
 <ol class="steps" start="2"><li>Save this as <code>compose.yaml</code> alongside the environment file.</li></ol>
 <pre>services:
   peerimeter-service:
