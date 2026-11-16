@@ -44,3 +44,20 @@ Only exact `vX.Y.Z` version tags, without prerelease suffixes such as `-rc1`,
 publish `linux/amd64` and `linux/arm64` images to
 `ghcr.io/peerimeter/peerimeter-service`. Pull requests build the image but do
 not publish it.
+
+### Existing data volume when upgrading to the `app` user
+
+The scratch image runs as UID/GID `1000:1000`. The earlier image ran as
+`65532:65532`, so migrate an existing data volume before starting the new image;
+otherwise the service cannot read the mode-`0600` config file. Back up the
+volume first. For a named Docker volume, replace `peerimeter-data` with its
+actual name:
+
+```sh
+docker run --rm --user 0:0 -v peerimeter-data:/data alpine:3.22 \
+  chown -R 1000:1000 /data
+```
+
+For a bind mount, run `sudo chown -R 1000:1000 /path/to/peerimeter-data` on the
+host. To roll back to the previous image, restore ownership to `65532:65532`
+before starting it.
