@@ -11,7 +11,7 @@ This is the independent `peerimeter-service` Go repository. The sibling `../.git
 
 ## Development
 
-- Keep this module independently buildable. Pin only `go 1.27` in `go.mod`; do not add a `.go-version` file or pin a Go patch release.
+- Keep this module independently buildable. Keep `go 1.27` in `go.mod`; use `.go-version` to pin the exact development/CI patch release.
 - Before changing code, read the relevant implementation and tests. Keep changes narrow and document limitations accurately.
 - Never commit API keys, private keys, production credentials, or generated usable configurations.
 - Follow `../.github/docs/repository-conventions.md` for branches, commits, PRs, checks and completion claims.

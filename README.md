@@ -14,7 +14,7 @@ initial implementation.
 
 ## Development
 
-Requires the Go 1.27 toolchain line declared in `go.mod`.
+Requires the Go version in `.go-version`; `go.mod` declares the compatible Go 1.27 language line.
 
 ```sh
 go test ./...
