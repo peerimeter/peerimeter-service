@@ -38,13 +38,14 @@ type configStore interface {
 type API struct {
 	key            string
 	publicURL      string
+	requireHTTPS   bool
 	store          configStore
 	logger         *slog.Logger
 	allowedOrigins map[string]bool
 }
 
-func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, corsAllowedOrigins ...string) http.Handler {
-	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), store: store, logger: logger, allowedOrigins: make(map[string]bool)}
+func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
+	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool)}
 	for _, raw := range corsAllowedOrigins {
 		if origin, err := normalizeOrigin(raw); err == nil {
 			a.allowedOrigins[origin] = true
@@ -366,8 +367,8 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := url.Parse(a.publicURL)
-	if err != nil || !validPublicAPIURL(u) {
-		writeError(w, http.StatusServiceUnavailable, "public HTTPS API URL is not configured")
+	if err != nil || !validPublicAPIURL(u, a.requireHTTPS) {
+		writeError(w, http.StatusServiceUnavailable, "public API URL is not configured or does not satisfy the HTTPS requirement")
 		return
 	}
 	data, err := json.Marshal(struct {
@@ -386,18 +387,11 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 	}{Token: base64.RawURLEncoding.EncodeToString(data)})
 }
 
-func validPublicAPIURL(u *url.URL) bool {
+func validPublicAPIURL(u *url.URL, requireHTTPS bool) bool {
 	if u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	return host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
+	return u.Scheme == "https" || (!requireHTTPS && u.Scheme == "http")
 }
 
 func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,7 @@ type Config struct {
 	DataFile           string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
 	ListenAddr         string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
 	PublicAPIURL       string `env:"PEERIMETER_PUBLIC_API_URL"`
+	RequireHTTPS       bool   `env:"PEERIMETER_REQUIRE_HTTPS" envDefault:"true"`
 	CORSAllowedOrigins string `env:"PEERIMETER_CORS_ALLOWED_ORIGINS"`
 	Port               string `env:"PORT" envDefault:"8080"`
 }

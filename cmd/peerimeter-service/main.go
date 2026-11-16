@@ -34,7 +34,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenAddr, cfg.Port),
-		Handler:           api.New(cfg.APIKey, cfg.PublicAPIURL, store, logger, strings.Split(cfg.CORSAllowedOrigins, ",")...),
+		Handler:           api.New(cfg.APIKey, cfg.PublicAPIURL, store, logger, cfg.RequireHTTPS, strings.Split(cfg.CORSAllowedOrigins, ",")...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

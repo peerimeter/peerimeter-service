@@ -38,7 +38,9 @@ outside local development. `PEERIMETER_DATA_FILE` defaults to
 writable path if that location is not writable by your local process. The
 `PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation. The local
 `.env.example` uses `http://localhost:8080`; set the public HTTPS URL when
-deploying the service.
+deploying the service. HTTPS is required by default and can be toggled with
+`PEERIMETER_REQUIRE_HTTPS`; only disable it for local development or a trusted
+private environment.
 `PEERIMETER_CORS_ALLOWED_ORIGINS` optionally enables browser access from a
 comma-separated allowlist of exact HTTP(S) origins, such as
 `https://dashboard.example.com,https://admin.example.com`. Values may include a
