@@ -36,8 +36,9 @@ this to `0.0.0.0`. `PEERIMETER_API_KEY` must be set to a high entropy secret
 outside local development. `PEERIMETER_DATA_FILE` defaults to
 `/var/lib/peerimeter/config.json` in the service; without direnv, set it to a
 writable path if that location is not writable by your local process. The
-`PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation and must be
-HTTPS.
+`PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation. The local
+`.env.example` uses `http://localhost:8080`; set the public HTTPS URL when
+deploying the service.
 `PEERIMETER_CORS_ALLOWED_ORIGINS` optionally enables browser access from a
 comma-separated allowlist of exact HTTP(S) origins, such as
 `https://dashboard.example.com,https://admin.example.com`. Values may include a
