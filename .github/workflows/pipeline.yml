@@ -157,7 +157,6 @@ jobs:
           docker buildx build --platform linux/amd64,linux/arm64 \
             --tag "$IMAGE:$VERSION_TAG" \
             --tag "$IMAGE:${VERSION_TAG#v}" \
-            --tag "$IMAGE:latest" \
             --push .
       - name: Create version tag and GitHub release
         run: |
@@ -170,6 +169,8 @@ jobs:
           if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
             gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
           fi
+      - name: Promote latest image tag
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION_TAG"
 
   recover-release:
     if: always() && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.version.result == 'success'
