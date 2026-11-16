@@ -17,15 +17,20 @@ initial implementation.
 Requires the Go version in `.go-version`; `go.mod` declares the compatible Go 1.27 language line.
 
 ```sh
-go test ./...
-PEERIMETER_API_KEY=local-development-only \
-PEERIMETER_DATA_FILE=./data/config.json \
-go run ./cmd/peerimeter-service
+make env
+make test
+make run
 ```
 
-Set `PEERIMETER_API_KEY` to a high entropy secret and optionally set
-`PEERIMETER_DATA_FILE` (default `/var/lib/peerimeter/config.json`) and
-`PEERIMETER_PUBLIC_API_URL` (required for join-bundle creation; must be HTTPS).
+`make env` copies `.env.example` to `.env` if `.env` does not already exist. The
+`.envrc` loads `.env` when using [direnv](https://direnv.net/); approve it once
+with `direnv allow`. `.env` is ignored by Git. Edit it for local development;
+the example API key is not suitable for deployment. The `.env` defaults include
+`CGO_ENABLED=0` and `PORT=8080`. `PEERIMETER_API_KEY` must be set to a high
+entropy secret outside local development. `PEERIMETER_DATA_FILE` defaults to
+`/var/lib/peerimeter/config.json` in the service, and
+`PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation and must be
+HTTPS.
 The network and node `PUT` bodies must be JSON objects with `"version": 1`.
 
 All API routes except `/healthz` require `Authorization: Bearer <key>`. The
