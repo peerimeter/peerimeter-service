@@ -366,7 +366,7 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := url.Parse(a.publicURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || !validPublicAPIURL(u) {
 		writeError(w, http.StatusServiceUnavailable, "public HTTPS API URL is not configured")
 		return
 	}
@@ -384,6 +384,20 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Token string `json:"token"`
 	}{Token: base64.RawURLEncoding.EncodeToString(data)})
+}
+
+func validPublicAPIURL(u *url.URL) bool {
+	if u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	return host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
 }
 
 func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {

@@ -357,7 +357,25 @@ func TestJoinBundleRequiresExistingNetwork(t *testing.T) {
 	}
 }
 
-func TestRejectInvalidJSONAndNonHTTPSJoinURL(t *testing.T) {
+func TestJoinBundleAllowsHTTPForLoopbackDevelopmentURL(t *testing.T) {
+	handler := newTestAPI(t, "http://localhost:8080")
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
+	create.Header.Set("Authorization", "Bearer test-static-key")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create network status = %d: %s", created.Code, created.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle?network_id=net-a", nil)
+	req.Header.Set("Authorization", "Bearer test-static-key")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("loopback join bundle status = %d: %s", res.Code, res.Body)
+	}
+}
+
+func TestRejectInvalidJSONAndNonLoopbackHTTPJoinURL(t *testing.T) {
 	handler := newTestAPI(t, "http://service.example")
 	for _, body := range []string{`[]`, `null`, `not-json`, `{"version":2}`} {
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-a/config", strings.NewReader(body))
