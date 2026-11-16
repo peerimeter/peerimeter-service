@@ -237,9 +237,16 @@ func TestRejectsPathLikeNetworkAndNodeIDs(t *testing.T) {
 	}
 }
 
-func TestJoinBundleCarriesStaticKey(t *testing.T) {
+func TestJoinBundleCarriesStaticKeyAndNetwork(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle", nil)
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
+	create.Header.Set("Authorization", "Bearer test-static-key")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create network status = %d: %s", created.Code, created.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle?network_id=net-a", nil)
 	req.Header.Set("Authorization", "Bearer test-static-key")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -260,15 +267,35 @@ func TestJoinBundleCarriesStaticKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var bundle struct {
-		Version int    `json:"version"`
-		APIURL  string `json:"api_url"`
-		Key     string `json:"enrollment_token"`
+		Version   int    `json:"version"`
+		APIURL    string `json:"api_url"`
+		NetworkID string `json:"network_id"`
+		Key       string `json:"enrollment_token"`
 	}
 	if err := json.Unmarshal(decoded, &bundle); err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.Key != "test-static-key" {
+	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.NetworkID != "net-a" || bundle.Key != "test-static-key" {
 		t.Fatalf("unexpected join bundle: %+v", bundle)
+	}
+}
+
+func TestJoinBundleRequiresExistingNetwork(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/api/v1/join-bundle", http.StatusBadRequest},
+		{"/api/v1/join-bundle?network_id=missing", http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer test-static-key")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != tc.want {
+			t.Errorf("GET %s status = %d, want %d", tc.path, res.Code, tc.want)
+		}
 	}
 }
 
@@ -283,7 +310,11 @@ func TestRejectInvalidJSONAndNonHTTPSJoinURL(t *testing.T) {
 			t.Errorf("PUT body %q status = %d, want 400", body, res.Code)
 		}
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle", nil)
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
+	create.Header.Set("Authorization", "Bearer test-static-key")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/join-bundle?network_id=net-a", nil)
 	req.Header.Set("Authorization", "Bearer test-static-key")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)

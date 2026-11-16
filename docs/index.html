@@ -37,8 +37,6 @@ for attempt in $(seq 1 30); do
 done
 if [ "$SERVICE_READY" -eq 1 ]; then
   curl --max-time 2 --fail http://127.0.0.1:8080/healthz
-  curl --max-time 5 --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
-    http://127.0.0.1:8080/api/v1/join-bundle
 else
   echo "Service did not become ready; see service.log" &gt;&amp;2
   cat service.log
@@ -50,7 +48,7 @@ fi</pre>
   http://127.0.0.1:8080/api/v1/networks</pre>
 <h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
-  https://service.example.com/api/v1/join-bundle</pre>
+  'https://service.example.com/api/v1/join-bundle?network_id=home'</pre>
 <p class="muted">Agents can use <code>config pull</code> and <code>config push</code> to exchange network and node config files. This is explicit, one-shot transfer; the service does not automatically reconcile agent runtime state.</p></section>
 <section id="docker" class="section"><h2>Docker Compose setup</h2><p class="muted">The published image targets Linux amd64 and arm64 and runs as the unprivileged <code>app</code> user (UID/GID 1000). Select a versioned image tag from the service’s <a href="https://github.com/peerimeter/peerimeter-service/releases">GitHub releases</a>.</p>
 <ol class="steps"><li>Create a deployment directory, persistent data directory, and environment file.</li></ol>
