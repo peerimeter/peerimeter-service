@@ -1,14 +1,19 @@
 package configstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -135,11 +140,7 @@ func (s *Store) loadNodeFiles() error {
 			if err != nil {
 				return fmt.Errorf("read node config: %w", err)
 			}
-			var document any
-			if err := yaml.Unmarshal(data, &document); err != nil {
-				return fmt.Errorf("decode node YAML: %w", err)
-			}
-			value, err := json.Marshal(document)
+			value, err := yamlDocumentToJSON(data)
 			if err != nil {
 				return fmt.Errorf("encode node config: %w", err)
 			}
@@ -187,11 +188,7 @@ func (s *Store) loadRegistrationFiles() error {
 			if err != nil {
 				return fmt.Errorf("read node registration: %w", err)
 			}
-			var document any
-			if err := yaml.Unmarshal(data, &document); err != nil {
-				return fmt.Errorf("decode node registration YAML: %w", err)
-			}
-			value, err := json.Marshal(document)
+			value, err := yamlDocumentToJSON(data)
 			if err != nil {
 				return fmt.Errorf("encode node registration: %w", err)
 			}
@@ -559,8 +556,8 @@ func (s *Store) persistRegistration(networkID, nodeID string, value json.RawMess
 }
 
 func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessage) (bool, error) {
-	var document any
-	if err := yaml.Unmarshal(value, &document); err != nil {
+	document, err := jsonDocumentToYAML(value)
+	if err != nil {
 		return false, fmt.Errorf("decode node config: %w", err)
 	}
 	data, err := yaml.Marshal(document)
@@ -604,6 +601,139 @@ func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessag
 		return true, fmt.Errorf("sync node config directory: %w", err)
 	}
 	return true, nil
+}
+
+func jsonDocumentToYAML(value []byte) (*yaml.Node, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	content, err := jsonValueNode(decoded)
+	if err != nil {
+		return nil, err
+	}
+	return &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{content}}, nil
+}
+
+func jsonValueNode(value any) (*yaml.Node, error) {
+	scalar := func(tag, value string, style yaml.Style) *yaml.Node {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value, Style: style}
+	}
+	switch value := value.(type) {
+	case nil:
+		return scalar("!!null", "null", 0), nil
+	case bool:
+		return scalar("!!bool", strconv.FormatBool(value), 0), nil
+	case string:
+		return scalar("!!str", value, yaml.DoubleQuotedStyle), nil
+	case json.Number:
+		tag := "!!int"
+		if strings.ContainsAny(string(value), ".eE") {
+			tag = "!!float"
+		}
+		return scalar(tag, string(value), 0), nil
+	case []any:
+		node := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, item := range value {
+			child, err := jsonValueNode(item)
+			if err != nil {
+				return nil, err
+			}
+			node.Content = append(node.Content, child)
+		}
+		return node, nil
+	case map[string]any:
+		node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item, err := jsonValueNode(value[key])
+			if err != nil {
+				return nil, err
+			}
+			node.Content = append(node.Content, scalar("!!str", key, yaml.DoubleQuotedStyle), item)
+		}
+		return node, nil
+	default:
+		return nil, fmt.Errorf("unsupported JSON value %T", value)
+	}
+}
+
+func yamlDocumentToJSON(data []byte) (json.RawMessage, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) != 1 {
+		return nil, errors.New("YAML document must have one root value")
+	}
+	value, err := yamlValueJSON(document.Content[0])
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(value)
+	return json.RawMessage(encoded), err
+}
+
+func yamlValueJSON(node *yaml.Node) (any, error) {
+	switch node.Kind {
+	case yaml.MappingNode:
+		if len(node.Content)%2 != 0 {
+			return nil, errors.New("invalid YAML mapping")
+		}
+		value := make(map[string]any, len(node.Content)/2)
+		for i := 0; i < len(node.Content); i += 2 {
+			key := node.Content[i]
+			if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+				return nil, errors.New("YAML mapping keys must be strings")
+			}
+			item, err := yamlValueJSON(node.Content[i+1])
+			if err != nil {
+				return nil, err
+			}
+			value[key.Value] = item
+		}
+		return value, nil
+	case yaml.SequenceNode:
+		value := make([]any, 0, len(node.Content))
+		for _, child := range node.Content {
+			item, err := yamlValueJSON(child)
+			if err != nil {
+				return nil, err
+			}
+			value = append(value, item)
+		}
+		return value, nil
+	case yaml.ScalarNode:
+		switch node.Tag {
+		case "!!null":
+			return nil, nil
+		case "!!bool":
+			return strconv.ParseBool(node.Value)
+		case "!!int", "!!float":
+			if !json.Valid([]byte(node.Value)) || strings.ContainsAny(node.Value, " \t\r\n") {
+				return nil, errors.New("YAML numeric value is not a JSON number")
+			}
+			return json.Number(node.Value), nil
+		case "!!str", "!":
+			return node.Value, nil
+		default:
+			return nil, fmt.Errorf("unsupported YAML scalar tag %q", node.Tag)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported YAML node kind %d", node.Kind)
+	}
 }
 
 func registerNodeDocument(n network, registration json.RawMessage, nodeID string) (json.RawMessage, error) {

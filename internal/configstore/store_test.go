@@ -65,7 +65,7 @@ func TestConcurrentQueuedWritesPersistAcrossRestart(t *testing.T) {
 	}
 	nodeFile := filepath.Join(path+".nodes", "network-a", "node-1.yaml")
 	nodeYAML, err := os.ReadFile(nodeFile)
-	if err != nil || !strings.Contains(string(nodeYAML), "revision: 1") {
+	if err != nil || !strings.Contains(string(nodeYAML), `"revision": 1`) {
 		t.Fatalf("node YAML = %q, err = %v", nodeYAML, err)
 	}
 	if info, err := os.Stat(nodeFile); err != nil || info.Mode().Perm() != 0o600 {
@@ -147,9 +147,60 @@ func TestYAMLNodePersistencePreservesLargeJSONIntegers(t *testing.T) {
 	}
 }
 
+func TestYAMLNodePersistencePreservesLiteralNEL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store, err := Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := json.RawMessage("{\"version\":1,\"text\":\"AB\"}")
+	if err := store.PutNode(context.Background(), "net-a", "node-a", value); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetNode("net-a", "node-a")
+	var decoded map[string]any
+	if err == nil {
+		err = json.Unmarshal(got, &decoded)
+	}
+	if err != nil || decoded["text"] != "AB" {
+		t.Fatalf("reopened node = %q, err = %v", got, err)
+	}
+}
+
+func TestNodeWriteUsesJSONLastValueForDuplicateKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store, err := Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNode(context.Background(), "net-a", "node-a", json.RawMessage(`{"version":1,"name":"old","name":"new"}`)); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store, err = Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetNode("net-a", "node-a")
+	var decoded map[string]any
+	if err == nil {
+		err = json.Unmarshal(got, &decoded)
+	}
+	if err != nil || decoded["name"] != "new" {
+		t.Fatalf("reopened duplicate-key node = %s, err = %v", got, err)
+	}
+}
+
 func TestLegacyMigrationPreservesLargeJSONIntegers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"config":{"version":1},"nodes":{"node-a":{"version":1,"revision":9007199254740993}}}}}`
+	legacy := `{"version":1,"networks":{"net-a":{"config":{"version":1},"nodes":{"node-a":{"version":1,"revision":9007199254740993,"name":"old","name":"new"}}}}}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +215,7 @@ func TestLegacyMigrationPreservesLargeJSONIntegers(t *testing.T) {
 	}
 	defer store.Close()
 	got, err := store.GetNode("net-a", "node-a")
-	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) {
+	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) || !strings.Contains(string(got), `"name":"new"`) {
 		t.Fatalf("migrated node = %s, err = %v", got, err)
 	}
 }
