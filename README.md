@@ -51,6 +51,32 @@ Use `GET`/`PUT /api/v1/networks/{networkID}/config` and
 `GET`/`PUT /api/v1/networks/{networkID}/nodes/{nodeID}/config` to pull or push
 config. Files are replaced atomically with mode `0600`. Writes are serialized
 inside one process; run a single service instance against each data file.
+Create a managed network with `POST /api/v1/networks` using a version 1 object
+with `id`, `name`, and a canonical private IPv4 WireGuard `cidr` (for example,
+`10.90.0.0/24`). The service also exposes `GET /api/v1/networks` and
+`GET /api/v1/networks/{networkID}` for listing and reading network metadata.
+Network metadata is separate from the legacy network config exchange
+`/config` endpoints.
+User-managed node config documents are stored as individual YAML files under
+`<PEERIMETER_DATA_FILE>.nodes/{networkID}/{nodeID}.yaml`; agent registrations
+are stored separately under the sibling `.registrations/` directory so a
+config upload cannot change a node's assigned address. Both directories must
+be backed up with the main data file. The REST API continues to accept and
+return version 1 JSON. Existing node config documents in the earlier single
+JSON file are migrated to this layout at startup. An authenticated
+`GET /api/v1/networks/{networkID}/nodes/{nodeID}/peers` returns the other stored
+node documents as `{ "version": 1, "peers": { "node-id": { ... } } }`. This
+endpoint is only a document exchange primitive: it does not enroll or
+authenticate individual devices, discover endpoints, or establish tunnels.
+`PUT /api/v1/networks/{networkID}/nodes/{nodeID}/registration` accepts a v1
+node report (`public_key`, `listen_port`, `primary_interface`,
+`local_addresses`, and optional `public_endpoint`). For a network created with
+the API, the service atomically allocates an unused tunnel IPv4 address from
+its CIDR, returns the node document, and writes it to that node's YAML file.
+Re-registering the same node ID and public key preserves its address; using a
+different key with that ID returns a conflict. The current shared API key still
+authorizes every network and node operation; registration does not yet issue
+per-device credentials.
 
 Pull requests build the image but do not publish it. On `main`, Conventional
 Commit messages determine whether a release is due: `feat` increments minor,
