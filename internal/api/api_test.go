@@ -229,6 +229,13 @@ func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
 	if peerRes.Code != http.StatusOK || !strings.Contains(peerRes.Body.String(), `"node-b"`) || strings.Contains(peerRes.Body.String(), `"node-a"`) {
 		t.Fatalf("registered peers = %d %s", peerRes.Code, peerRes.Body)
 	}
+	allPeers := httptest.NewRequest(http.MethodGet, "/api/v1/networks/net-auto/peers", nil)
+	allPeers.Header.Set("Authorization", "Bearer test-static-key")
+	allPeersRes := httptest.NewRecorder()
+	handler.ServeHTTP(allPeersRes, allPeers)
+	if allPeersRes.Code != http.StatusOK || !strings.Contains(allPeersRes.Body.String(), `"node-a"`) || !strings.Contains(allPeersRes.Body.String(), `"node-b"`) {
+		t.Fatalf("all registered peers = %d %s", allPeersRes.Code, allPeersRes.Body)
+	}
 }
 
 func TestEmptyNodeIDCannotOverwriteNetworkConfig(t *testing.T) {

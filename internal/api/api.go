@@ -60,6 +60,7 @@ func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, c
 		r.Post("/api/v1/networks", a.createNetwork)
 		r.Get("/api/v1/networks/{networkID}", a.getNetworkMetadata)
 		r.Get("/api/v1/networks/{networkID}/config", a.getNetwork)
+		r.Get("/api/v1/networks/{networkID}/peers", a.listAllPeers)
 		r.Put("/api/v1/networks/{networkID}/config", a.putNetwork)
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.getNode)
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/peers", a.listPeers)
@@ -310,6 +311,28 @@ func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {
 		Version int                        `json:"version"`
 		Peers   map[string]json.RawMessage `json:"peers"`
 	}{Version: 1, Peers: peers})
+}
+
+func (a *API) listAllPeers(w http.ResponseWriter, r *http.Request) {
+	networkID := chi.URLParam(r, "networkID")
+	if !validID(networkID) {
+		writeError(w, http.StatusBadRequest, "networkID is invalid")
+		return
+	}
+	nodes, err := a.store.ListRegisteredNodes(networkID)
+	if errors.Is(err, configstore.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "network not found")
+		return
+	}
+	if err != nil {
+		a.logger.Error("list peers", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not list peers")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Version int                        `json:"version"`
+		Peers   map[string]json.RawMessage `json:"peers"`
+	}{Version: 1, Peers: nodes})
 }
 
 func (a *API) authenticate(next http.Handler) http.Handler {
