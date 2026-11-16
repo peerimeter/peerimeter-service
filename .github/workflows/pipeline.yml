@@ -169,3 +169,27 @@ jobs:
           if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
             gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
           fi
+
+  recover-release:
+    if: always() && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.version.result == 'success'
+    needs: [check, version, release-image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create any missing release for this commit's version tag
+        run: |
+          git fetch --tags --force
+          while IFS= read -r VERSION_TAG; do
+            [[ "$VERSION_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            [[ "$VERSION_TAG" == v0.0.0 ]] && continue
+            if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+              gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
+            fi
+          done < <(git tag --points-at "$GITHUB_SHA" --list 'v[0-9]*')
