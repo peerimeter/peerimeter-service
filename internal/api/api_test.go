@@ -15,13 +15,17 @@ import (
 )
 
 func newTestAPI(t *testing.T, publicURL string, corsAllowedOrigins ...string) http.Handler {
+	return newTestAPIWithHTTPS(t, publicURL, true, corsAllowedOrigins...)
+}
+
+func newTestAPIWithHTTPS(t *testing.T, publicURL string, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
 	t.Helper()
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	return New("test-static-key", publicURL, store, slog.New(slog.NewJSONHandler(io.Discard, nil)), corsAllowedOrigins...)
+	return New("test-static-key", publicURL, store, slog.New(slog.NewJSONHandler(io.Discard, nil)), requireHTTPS, corsAllowedOrigins...)
 }
 
 func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
@@ -357,8 +361,8 @@ func TestJoinBundleRequiresExistingNetwork(t *testing.T) {
 	}
 }
 
-func TestJoinBundleAllowsHTTPForLoopbackDevelopmentURL(t *testing.T) {
-	handler := newTestAPI(t, "http://localhost:8080")
+func TestJoinBundleAllowsHTTPWhenHTTPSRequirementIsDisabled(t *testing.T) {
+	handler := newTestAPIWithHTTPS(t, "http://service.example", false)
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
 	create.Header.Set("Authorization", "Bearer test-static-key")
 	created := httptest.NewRecorder()
@@ -375,7 +379,7 @@ func TestJoinBundleAllowsHTTPForLoopbackDevelopmentURL(t *testing.T) {
 	}
 }
 
-func TestRejectInvalidJSONAndNonLoopbackHTTPJoinURL(t *testing.T) {
+func TestRejectInvalidJSONAndNonHTTPSJoinURL(t *testing.T) {
 	handler := newTestAPI(t, "http://service.example")
 	for _, body := range []string{`[]`, `null`, `not-json`, `{"version":2}`} {
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-a/config", strings.NewReader(body))
