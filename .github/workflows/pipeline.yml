@@ -157,6 +157,7 @@ jobs:
           docker buildx build --platform linux/amd64,linux/arm64 \
             --tag "$IMAGE:$VERSION_TAG" \
             --tag "$IMAGE:${VERSION_TAG#v}" \
+            --tag "$IMAGE:latest" \
             --push .
       - name: Create version tag and GitHub release
         run: |
