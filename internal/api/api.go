@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -22,7 +23,12 @@ const configVersion = 1
 
 type configStore interface {
 	GetNetwork(string) (json.RawMessage, error)
+	GetNetworkMetadata(string) (json.RawMessage, error)
 	GetNode(string, string) (json.RawMessage, error)
+	ListRegisteredNodes(string) (map[string]json.RawMessage, error)
+	ListNetworks() map[string]json.RawMessage
+	CreateNetwork(ctx context.Context, id string, value json.RawMessage) error
+	RegisterNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) (json.RawMessage, error)
 	PutNetwork(ctx context.Context, id string, value json.RawMessage) error
 	PutNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) error
 }
@@ -41,12 +47,197 @@ func New(key, publicURL string, store *configstore.Store, logger *slog.Logger) h
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Get("/api/v1/join-bundle", a.joinBundle)
+		r.Get("/api/v1/networks", a.listNetworks)
+		r.Post("/api/v1/networks", a.createNetwork)
+		r.Get("/api/v1/networks/{networkID}", a.getNetworkMetadata)
 		r.Get("/api/v1/networks/{networkID}/config", a.getNetwork)
 		r.Put("/api/v1/networks/{networkID}/config", a.putNetwork)
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.getNode)
+		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/peers", a.listPeers)
+		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/registration", a.registerNode)
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.putNode)
 	})
 	return r
+}
+
+type nodeRegistration struct {
+	Version          int      `json:"version"`
+	PublicKey        string   `json:"public_key"`
+	ListenPort       int      `json:"listen_port"`
+	PrimaryInterface string   `json:"primary_interface"`
+	LocalAddresses   []string `json:"local_addresses"`
+	PublicEndpoint   string   `json:"public_endpoint,omitempty"`
+}
+
+func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
+	networkID, nodeID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
+	if !validID(networkID) || !validID(nodeID) {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
+	if err != nil {
+		a.writePutResult(w, err)
+		return
+	}
+	var registration nodeRegistration
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&registration); err != nil || decoder.Decode(new(any)) != io.EOF || !validRegistration(registration) {
+		writeError(w, http.StatusBadRequest, "node registration is invalid")
+		return
+	}
+	canonical, _ := json.Marshal(registration)
+	value, err := a.store.RegisterNode(r.Context(), networkID, nodeID, canonical)
+	if err != nil {
+		switch {
+		case errors.Is(err, configstore.ErrNotFound):
+			writeError(w, http.StatusNotFound, "network not found")
+		case errors.Is(err, configstore.ErrNodeConflict):
+			writeError(w, http.StatusConflict, "node ID is registered with another public key")
+		case errors.Is(err, configstore.ErrDuplicateKey):
+			writeError(w, http.StatusConflict, "public key is already registered in this network")
+		case errors.Is(err, configstore.ErrNoAddress):
+			writeError(w, http.StatusConflict, "network has no available node addresses")
+		default:
+			a.logger.Error("register node", "error", err)
+			writeError(w, http.StatusInternalServerError, "could not register node")
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(value)
+}
+
+func validRegistration(registration nodeRegistration) bool {
+	key, err := base64.StdEncoding.Strict().DecodeString(registration.PublicKey)
+	if registration.Version != 1 || err != nil || len(key) != 32 || allZero(key) || registration.PublicKey != base64.StdEncoding.EncodeToString(key) || registration.ListenPort < 1 || registration.ListenPort > 65535 || strings.TrimSpace(registration.PrimaryInterface) == "" || len(registration.PrimaryInterface) > 64 || strings.ContainsAny(registration.PrimaryInterface, "\r\n\x00") || len(registration.LocalAddresses) == 0 || len(registration.LocalAddresses) > 16 {
+		return false
+	}
+	var local []netip.Prefix
+	for _, raw := range registration.LocalAddresses {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsLoopback() || prefix.Addr().IsMulticast() || prefix.Addr().IsUnspecified() || prefix.Addr().Is4In6() {
+			return false
+		}
+		for _, previous := range local {
+			if previous == prefix {
+				return false
+			}
+		}
+		local = append(local, prefix)
+	}
+	if registration.PublicEndpoint != "" {
+		endpoint, err := netip.ParseAddrPort(registration.PublicEndpoint)
+		if err != nil || endpoint.Port() == 0 || (!endpoint.Addr().IsGlobalUnicast() && !endpoint.Addr().IsLoopback()) || endpoint.Addr().IsLinkLocalUnicast() || endpoint.Addr().Zone() != "" || endpoint.Addr().Is4In6() {
+			return false
+		}
+	}
+	return true
+}
+
+func allZero(value []byte) bool {
+	for _, b := range value {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+type networkRequest struct {
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	CIDR    string `json:"cidr"`
+}
+
+func (a *API) listNetworks(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, struct {
+		Version  int                        `json:"version"`
+		Networks map[string]json.RawMessage `json:"networks"`
+	}{Version: 1, Networks: a.store.ListNetworks()})
+}
+
+func (a *API) getNetworkMetadata(w http.ResponseWriter, r *http.Request) {
+	networkID := chi.URLParam(r, "networkID")
+	if !validID(networkID) {
+		writeError(w, http.StatusBadRequest, "networkID is invalid")
+		return
+	}
+	value, err := a.store.GetNetworkMetadata(networkID)
+	a.writeConfig(w, value, err)
+}
+
+func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
+	if err != nil {
+		a.writePutResult(w, err)
+		return
+	}
+	var request networkRequest
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(new(any)) != io.EOF {
+		writeError(w, http.StatusBadRequest, "body must contain version, id, name and cidr")
+		return
+	}
+	if request.Version != 1 || !validID(request.ID) || strings.TrimSpace(request.Name) == "" || len(request.Name) > 128 || strings.ContainsAny(request.Name, "\r\n\x00") {
+		writeError(w, http.StatusBadRequest, "network version, id or name is invalid")
+		return
+	}
+	prefix, err := netip.ParsePrefix(request.CIDR)
+	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !prefix.Addr().IsPrivate() {
+		writeError(w, http.StatusBadRequest, "cidr must be a canonical private IPv4 network between /8 and /30")
+		return
+	}
+	canonical, err := json.Marshal(request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "network config is invalid")
+		return
+	}
+	if err := a.store.CreateNetwork(r.Context(), request.ID, canonical); err != nil {
+		if errors.Is(err, configstore.ErrExists) {
+			writeError(w, http.StatusConflict, "network already exists")
+			return
+		}
+		if errors.Is(err, configstore.ErrCIDROverlap) {
+			writeError(w, http.StatusConflict, "network CIDR overlaps an existing network")
+			return
+		}
+		a.writePutResult(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {
+	networkID, selfID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
+	if !validID(networkID) || !validID(selfID) {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
+		return
+	}
+	nodes, err := a.store.ListRegisteredNodes(networkID)
+	if errors.Is(err, configstore.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "network not found")
+		return
+	}
+	if err != nil {
+		a.logger.Error("list peers", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not list peers")
+		return
+	}
+	peers := make(map[string]json.RawMessage, len(nodes))
+	for id, value := range nodes {
+		if id != selfID {
+			peers[id] = value
+		}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Version int                        `json:"version"`
+		Peers   map[string]json.RawMessage `json:"peers"`
+	}{Version: 1, Peers: peers})
 }
 
 func (a *API) authenticate(next http.Handler) http.Handler {
@@ -82,12 +273,22 @@ func (a *API) joinBundle(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {
-	value, err := a.store.GetNetwork(chi.URLParam(r, "networkID"))
+	networkID := chi.URLParam(r, "networkID")
+	if !validID(networkID) {
+		writeError(w, http.StatusBadRequest, "networkID is invalid")
+		return
+	}
+	value, err := a.store.GetNetwork(networkID)
 	a.writeConfig(w, value, err)
 }
 
 func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
-	value, err := a.store.GetNode(chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID"))
+	networkID, nodeID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
+	if !validID(networkID) || !validID(nodeID) {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
+		return
+	}
+	value, err := a.store.GetNode(networkID, nodeID)
 	a.writeConfig(w, value, err)
 }
 
@@ -107,8 +308,8 @@ func (a *API) writeConfig(w http.ResponseWriter, value json.RawMessage, err erro
 }
 
 func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
-	if chi.URLParam(r, "networkID") == "" {
-		writeError(w, http.StatusBadRequest, "networkID must not be empty")
+	if !validID(chi.URLParam(r, "networkID")) {
+		writeError(w, http.StatusBadRequest, "networkID is invalid")
 		return
 	}
 	value, err := readConfig(r)
@@ -119,8 +320,8 @@ func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) putNode(w http.ResponseWriter, r *http.Request) {
-	if chi.URLParam(r, "networkID") == "" || chi.URLParam(r, "nodeID") == "" {
-		writeError(w, http.StatusBadRequest, "networkID and nodeID must not be empty")
+	if !validID(chi.URLParam(r, "networkID")) || !validID(chi.URLParam(r, "nodeID")) {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
 		return
 	}
 	value, err := readConfig(r)
@@ -128,6 +329,18 @@ func (a *API) putNode(w http.ResponseWriter, r *http.Request) {
 		err = a.store.PutNode(r.Context(), chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID"), value)
 	}
 	a.writePutResult(w, err)
+}
+
+func validID(value string) bool {
+	if value == "" || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func readConfig(r *http.Request) (json.RawMessage, error) {

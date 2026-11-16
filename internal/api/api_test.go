@@ -62,6 +62,120 @@ func TestNetworkAndNodeConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateAndListNetworkWithWireGuardCIDR(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	const body = `{"version":1,"id":"net-auto","name":"automesh","cidr":"10.90.0.0/24"}`
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(body))
+	create.Header.Set("Authorization", "Bearer test-static-key")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create network status = %d: %s", created.Code, created.Body)
+	}
+	duplicate := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(body))
+	duplicate.Header.Set("Authorization", "Bearer test-static-key")
+	duplicateRes := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRes, duplicate)
+	if duplicateRes.Code != http.StatusConflict {
+		t.Fatalf("duplicate network status = %d, want 409", duplicateRes.Code)
+	}
+	overlap := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-overlap","name":"Overlap","cidr":"10.90.0.128/25"}`))
+	overlap.Header.Set("Authorization", "Bearer test-static-key")
+	overlapRes := httptest.NewRecorder()
+	handler.ServeHTTP(overlapRes, overlap)
+	if overlapRes.Code != http.StatusConflict {
+		t.Fatalf("overlapping network CIDR status = %d, want 409", overlapRes.Code)
+	}
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/networks/net-auto", nil)
+	get.Header.Set("Authorization", "Bearer test-static-key")
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, get)
+	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), `"cidr":"10.90.0.0/24"`) {
+		t.Fatalf("network config = %d %s", getRes.Code, getRes.Body)
+	}
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/networks", nil)
+	list.Header.Set("Authorization", "Bearer test-static-key")
+	listRes := httptest.NewRecorder()
+	handler.ServeHTTP(listRes, list)
+	if listRes.Code != http.StatusOK || !strings.Contains(listRes.Body.String(), `"net-auto"`) {
+		t.Fatalf("network list = %d %s", listRes.Code, listRes.Body)
+	}
+}
+
+func TestCreateNetworkRejectsInvalidCIDR(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	for _, cidr := range []string{"10.90.0.1/24", "8.8.8.0/24", "10.0.0.0/7", "10.90.0.0/31", "2001:db8::/64", "garbage"} {
+		body := `{"version":1,"id":"net-auto","name":"automesh","cidr":"` + cidr + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-static-key")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("POST cidr %q status = %d, want 400", cidr, res.Code)
+		}
+	}
+}
+
+func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-auto","name":"automesh","cidr":"10.90.0.0/24"}`))
+	create.Header.Set("Authorization", "Bearer test-static-key")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create network status = %d: %s", created.Code, created.Body)
+	}
+	key := func(first byte) string {
+		value := make([]byte, 32)
+		value[0] = first
+		return base64.StdEncoding.EncodeToString(value)
+	}
+	register := func(nodeID string, publicKey string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(nodeRegistration{Version: 1, PublicKey: publicKey, ListenPort: 51820, PrimaryInterface: "eth0", LocalAddresses: []string{"192.168.1.12/24"}})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-auto/nodes/"+nodeID+"/registration", strings.NewReader(string(body)))
+		req.Header.Set("Authorization", "Bearer test-static-key")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		return res
+	}
+	for nodeID, public := range map[string]string{"node-a": key(1), "node-b": key(2)} {
+		res := register(nodeID, public)
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"tunnel_address":"10.90.0.`) {
+			t.Fatalf("register %s = %d %s", nodeID, res.Code, res.Body)
+		}
+	}
+	first := register("node-a", key(1))
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"tunnel_address":"10.90.0.1"`) {
+		t.Fatalf("re-register did not preserve address: %d %s", first.Code, first.Body)
+	}
+	configPut := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-auto/nodes/node-a/config", strings.NewReader(`{"version":1,"tunnel_address":"10.90.0.99"}`))
+	configPut.Header.Set("Authorization", "Bearer test-static-key")
+	configRes := httptest.NewRecorder()
+	handler.ServeHTTP(configRes, configPut)
+	if configRes.Code != http.StatusNoContent {
+		t.Fatalf("put node config = %d %s", configRes.Code, configRes.Body)
+	}
+	first = register("node-a", key(1))
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"tunnel_address":"10.90.0.1"`) {
+		t.Fatalf("node config overwrote registered address: %d %s", first.Code, first.Body)
+	}
+	conflict := register("node-a", key(3))
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("different key under existing node ID = %d %s", conflict.Code, conflict.Body)
+	}
+	duplicateKey := register("node-c", key(1))
+	if duplicateKey.Code != http.StatusConflict {
+		t.Fatalf("duplicate public key = %d %s", duplicateKey.Code, duplicateKey.Body)
+	}
+	peers := httptest.NewRequest(http.MethodGet, "/api/v1/networks/net-auto/nodes/node-a/peers", nil)
+	peers.Header.Set("Authorization", "Bearer test-static-key")
+	peerRes := httptest.NewRecorder()
+	handler.ServeHTTP(peerRes, peers)
+	if peerRes.Code != http.StatusOK || !strings.Contains(peerRes.Body.String(), `"node-b"`) || strings.Contains(peerRes.Body.String(), `"node-a"`) {
+		t.Fatalf("registered peers = %d %s", peerRes.Code, peerRes.Body)
+	}
+}
+
 func TestEmptyNodeIDCannotOverwriteNetworkConfig(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	put := func(path, body string) *httptest.ResponseRecorder {
@@ -85,6 +199,27 @@ func TestEmptyNodeIDCannotOverwriteNetworkConfig(t *testing.T) {
 	handler.ServeHTTP(getRes, get)
 	if getRes.Code != http.StatusOK || getRes.Body.String() != networkBody {
 		t.Fatalf("network config after empty node ID PUT = %d %s, want %s", getRes.Code, getRes.Body, networkBody)
+	}
+}
+
+func TestRejectsPathLikeNetworkAndNodeIDs(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	for _, path := range []string{
+		"/api/v1/networks/../config",
+		"/api/v1/networks/net-a/nodes/%2e%2e/config",
+		"/api/v1/networks/net-a/nodes/node-a/peers",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer test-static-key")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if path == "/api/v1/networks/net-a/nodes/node-a/peers" {
+			if res.Code != http.StatusNotFound {
+				t.Errorf("GET empty network peer list = %d, want 404", res.Code)
+			}
+		} else if res.Code != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want 400", path, res.Code)
+		}
 	}
 }
 
