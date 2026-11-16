@@ -14,14 +14,32 @@ initial implementation.
 
 ## Development
 
-Requires Go 1.27.4.
+Requires the Go 1.27 toolchain line declared in `go.mod`.
 
 ```sh
-export GOTOOLCHAIN=go1.27.4
 go test ./...
+PEERIMETER_API_KEY=local-development-only \
+PEERIMETER_DATA_FILE=./data/config.json \
 go run ./cmd/peerimeter-service
 ```
 
-See the API and deployment documentation as those features land. The service
-requires `PEERIMETER_API_KEY` and a writable JSON data path; never commit real
-credentials or configuration data.
+Set `PEERIMETER_API_KEY` to a high entropy secret and optionally set
+`PEERIMETER_DATA_FILE` (default `/var/lib/peerimeter/config.json`) and
+`PEERIMETER_PUBLIC_API_URL` (required for join-bundle creation; must be HTTPS).
+The network and node `PUT` bodies must be JSON objects with `"version": 1`.
+
+All API routes except `/healthz` require `Authorization: Bearer <key>`. The
+`GET /api/v1/join-bundle` response contains a Base64URL-encoded v1 JSON bundle;
+its `enrollment_token` is the same static API key. Anyone holding it can access
+all networks and nodes. This shared credential has no per-agent scope or expiry.
+Terminate TLS at a trusted reverse proxy before exposing the API beyond a
+trusted local development environment.
+
+Use `GET`/`PUT /api/v1/networks/{networkID}/config` and
+`GET`/`PUT /api/v1/networks/{networkID}/nodes/{nodeID}/config` to pull or push
+config. Files are replaced atomically with mode `0600`. Writes are serialized
+inside one process; run a single service instance against each data file.
+
+Version tags (`v*`) publish `linux/amd64` and `linux/arm64` images to
+`ghcr.io/peerimeter/peerimeter-service`. Pull requests build the image but do
+not publish it.

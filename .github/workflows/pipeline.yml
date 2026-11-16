@@ -1,0 +1,80 @@
+name: Service CI and image release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l $(rg --files -g '*.go'))"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...
+      - name: Build binary
+        run: go build -trimpath -o /tmp/peerimeter-service ./cmd/peerimeter-service
+      - name: Build container image
+        run: docker build --tag peerimeter-service:ci .
+
+  action-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install GitHub Actions lock verifier
+        run: gh extension install github/gh-actions-lock
+      - name: Verify locked action dependencies
+        run: gh actions-lock --verify
+
+  check:
+    name: check
+    if: always()
+    needs: [verify, action-lock]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require service checks to pass
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          ACTION_LOCK_RESULT: ${{ needs.action-lock.result }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$ACTION_LOCK_RESULT" = success
+
+  publish-image:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [check]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build and push versioned image to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$VERSION_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --tag "$IMAGE:$VERSION_TAG" \
+            --tag "$IMAGE:${VERSION_TAG#v}" \
+            --push .
