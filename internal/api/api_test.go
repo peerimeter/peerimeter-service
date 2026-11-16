@@ -54,6 +54,16 @@ func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
 	}
 }
 
+func TestCORSVariesResponsesWhenOriginIsAbsent(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example.test", "https://dashboard.example.test")
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if got := result.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("Vary = %q, want Origin", got)
+	}
+}
+
 func TestCORSDoesNotAllowUnknownOrigin(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example.test", "https://dashboard.example.test")
 	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/networks", nil)

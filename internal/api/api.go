@@ -73,11 +73,15 @@ func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, c
 func (a *API) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" || len(a.allowedOrigins) == 0 {
+		if len(a.allowedOrigins) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Add("Vary", "Origin")
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		canonical, err := normalizeOrigin(origin)
 		if err != nil || !a.allowedOrigins[canonical] {
 			next.ServeHTTP(w, r)
