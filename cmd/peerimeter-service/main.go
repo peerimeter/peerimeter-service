@@ -45,18 +45,21 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownResult := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("shutdown HTTP server", "error", err)
-		}
+		shutdownResult <- server.Shutdown(shutdownCtx)
 	}()
 
 	logger.Info("starting peerimeter service", "addr", server.Addr, "data_file", path)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve HTTP", "error", err)
+		os.Exit(1)
+	}
+	if err := <-shutdownResult; err != nil {
+		logger.Error("shutdown HTTP server", "error", err)
 		os.Exit(1)
 	}
 }
