@@ -169,8 +169,15 @@ jobs:
           if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
             gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
           fi
-      - name: Promote latest image tag
-        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION_TAG"
+      - name: Promote latest image tag only for the newest release
+        run: |
+          git fetch --tags --force
+          newest_version="$(git tag --list 'v[0-9]*' | sort -V | tail -n 1)"
+          if [[ "$VERSION_TAG" != "$newest_version" ]]; then
+            echo "Skipping latest promotion; $newest_version is newer than $VERSION_TAG."
+            exit 0
+          fi
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION_TAG"
 
   recover-release:
     if: always() && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.version.result == 'success'
