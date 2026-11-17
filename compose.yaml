@@ -1,0 +1,18 @@
+services:
+  peerimeter-service:
+    image: ghcr.io/peerimeter/peerimeter-service:${SERVICE_IMAGE_TAG:?Set a released SERVICE_IMAGE_TAG in .env}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PEERIMETER_DATA_FILE: /var/lib/peerimeter/config.json
+      PEERIMETER_LISTEN_ADDR: 0.0.0.0
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/var/lib/peerimeter
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

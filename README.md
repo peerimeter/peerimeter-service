@@ -1,106 +1,186 @@
 # Peerimeter Service
 
-The Peerimeter control-plane API. This repository is independent from
-[`peerimeter-agent`](https://github.com/peerimeter/peerimeter-agent) and owns the
-versioned HTTP/JSON contract consumed by agents. See the [setup guide](https://service.peerimeter.app/)
-for running the service from source or with Docker Compose. The documentation
-is also published from this repository’s `docs/` directory through GitHub Pages.
+Peerimeter Service is the control-plane HTTP API used by Peerimeter agents to
+store and exchange network and node configuration. This repository owns the
+versioned HTTP/JSON contract; the [agent](https://github.com/peerimeter/peerimeter-agent)
+and [dashboard](https://github.com/peerimeter/peerimeter-dashboard) are separate
+projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 
-## Status
+## Current status
 
-Phase 3 service work is in progress. The initial service stores network and node
-configuration in one local JSON file. It uses an in-memory write queue and
-atomic file replacement for concurrent requests on one process. PostgreSQL,
-MQTT, user authentication and multi-instance coordination are not part of this
-initial implementation.
+The service stores network metadata and configuration in a local JSON file,
+with node configuration and registrations in adjacent directories. Writes are
+serialized and replaced atomically within one process. Run one service instance
+per data file. PostgreSQL, MQTT coordination, user accounts, and multi-instance
+locking are not included.
 
-## Development
+## Quick start with Docker Compose
 
-Requires the Go version in `.go-version`; `go.mod` declares the compatible Go 1.27 language line.
+The repository includes a Compose setup for the published multi-architecture
+image. It binds the service to host loopback, so a trusted HTTPS reverse proxy
+can forward requests to `127.0.0.1:8080`.
+
+1. Create a deployment directory and prepare persistent storage. The container
+   runs as UID/GID `1000`:
+
+   ```sh
+   mkdir -p peerimeter-service/data
+   cd peerimeter-service
+   sudo install -d -o 1000 -g 1000 data
+   umask 077
+   ```
+
+2. Create `.env` next to `compose.yaml`, using a released image tag and a unique
+   API key:
+
+   ```sh
+   cat > .env <<'EOF'
+   SERVICE_IMAGE_TAG=replace-with-a-release-tag
+   PEERIMETER_API_KEY=replace-with-a-unique-random-secret
+   PEERIMETER_PUBLIC_API_URL=https://service.example.com
+   EOF
+   chmod 600 .env
+   ```
+
+   Generate the key with `openssl rand -hex 32`. Replace the example image tag
+   with a version published at
+   [GitHub Releases](https://github.com/peerimeter/peerimeter-service/releases).
+   Keep `.env` private and out of version control.
+
+3. Start the service:
+
+   ```sh
+   docker compose pull
+   docker compose up -d
+   docker compose logs -f peerimeter-service
+   ```
+
+   Configure the reverse proxy to use `http://127.0.0.1:8080` as its upstream
+   and terminate HTTPS there. `PEERIMETER_PUBLIC_API_URL` must be the public
+   HTTPS URL agents will use.
+
+Back up the whole `data/` directory. It contains `config.json` and the adjacent
+`config.json.nodes/` and `config.json.registrations/` directories. The latter
+two hold node documents and registration state.
+
+## API
+
+All routes except `GET /healthz` require
+`Authorization: Bearer <credential>`. Management calls use
+`PEERIMETER_API_KEY`; agent join bundles contain a network-scoped enrollment
+token. Requests and responses use JSON. Config and registration documents use
+`"version": 1` and request bodies are limited to 1 MiB.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Unauthenticated health check (`204` when healthy). |
+| `GET` | `/api/v1/networks` | List managed network metadata. |
+| `POST` | `/api/v1/networks` | Create a managed network. |
+| `GET` | `/api/v1/networks/{networkID}` | Read network metadata. |
+| `GET` / `PUT` | `/api/v1/networks/{networkID}/config` | Read or replace network config. |
+| `GET` | `/api/v1/networks/{networkID}/peers` | List registered node documents for the dashboard. |
+| `GET` / `PUT` | `/api/v1/networks/{networkID}/nodes/{nodeID}/config` | Read or replace a node config document. |
+| `GET` | `/api/v1/networks/{networkID}/nodes/{nodeID}/peers` | List other registered node documents, excluding `{nodeID}`. |
+| `PUT` | `/api/v1/networks/{networkID}/nodes/{nodeID}/registration` | Register a node and allocate its tunnel address. |
+| `GET` | `/api/v1/join-bundle?network_id={networkID}` | Create a Base64URL-encoded agent join bundle. |
+
+`PUT` config requests accept any JSON object with `"version": 1`; the service
+stores and returns that document. Creating a network requires a canonical
+private IPv4 CIDR from `/8` through `/30`. The CIDR must not overlap another
+managed network.
+
+### Usage examples
+
+Set the base URL and management key in your shell. Use the public HTTPS URL
+after deploying behind the reverse proxy:
 
 ```sh
-make env
+export API_URL=https://service.example.com
+export PEERIMETER_API_KEY='your-management-key'
+```
+
+Create a network and list networks:
+
+```sh
+curl --fail-with-body -X POST "$API_URL/api/v1/networks" \
+  -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"version":1,"id":"home","name":"Home","cidr":"10.90.0.0/24"}'
+
+curl --fail-with-body "$API_URL/api/v1/networks" \
+  -H "Authorization: Bearer $PEERIMETER_API_KEY"
+```
+
+Request a join bundle for an existing network. The response's `token` value is
+itself Base64URL-encoded; pass it to the agent's join flow. Treat it as a
+credential:
+
+```sh
+curl --fail-with-body --get "$API_URL/api/v1/join-bundle" \
+  -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+  --data-urlencode 'network_id=home'
+```
+
+Read or replace configuration. Replace the example documents with the schema
+your agent or dashboard uses:
+
+```sh
+curl --fail-with-body "$API_URL/api/v1/networks/home/config" \
+  -H "Authorization: Bearer $PEERIMETER_API_KEY"
+
+curl --fail-with-body -X PUT "$API_URL/api/v1/networks/home/config" \
+  -H "Authorization: Bearer $PEERIMETER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"version":1,"name":"home-config"}'
+```
+
+For an agent, the enrollment token in the join bundle authorizes requests only
+for its network. Registration accepts a v1 report containing a WireGuard
+`public_key`, `listen_port`, `primary_interface`, and `local_addresses`; it
+returns the node document with its allocated `tunnel_address`. The agent
+performs this registration flow; see the
+[agent README](https://github.com/peerimeter/peerimeter-agent#readme) for its
+commands. The peers endpoints exchange stored documents only: they do not
+discover reachable endpoints or establish tunnels.
+
+## Run from source
+
+Use the Go version pinned in `.go-version` (`go.mod` declares the Go 1.27
+language line). With [direnv](https://direnv.net/) installed:
+
+```sh
+make env                 # create local .env from .env.example if missing
+direnv allow             # once per checkout
 make test
 make run
 ```
 
-`make env` copies `.env.example` to `.env` if `.env` does not already exist. The
-`.envrc` loads `.env` when using [direnv](https://direnv.net/); approve it once
-with `direnv allow` and run the commands with direnv active. `.env` is ignored
-by Git. Edit it for local development;
-the example API key is not suitable for deployment. The `.env` defaults include
-`CGO_ENABLED=0` and `PORT=8080`. `make run` requires direnv to load the local
-API key, or `PEERIMETER_API_KEY` to be exported in the shell. The service binds
-to `127.0.0.1` by default for local development; the container image overrides
-this to `0.0.0.0`. `PEERIMETER_API_KEY` must be set to a high entropy secret
-outside local development. `PEERIMETER_DATA_FILE` defaults to
-`/var/lib/peerimeter/config.json` in the service; without direnv, set it to a
-writable path if that location is not writable by your local process. The
-`PEERIMETER_PUBLIC_API_URL` is required for join-bundle creation. The local
-`.env.example` uses `http://localhost:8080`; set the public HTTPS URL when
-deploying the service. HTTPS is required by default and can be toggled with
-`PEERIMETER_REQUIRE_HTTPS`; only disable it for local development or a trusted
-private environment.
-`PEERIMETER_CORS_ALLOWED_ORIGINS` optionally enables browser access from a
-comma-separated allowlist of exact HTTP(S) origins, such as
-`https://dashboard.example.com,https://admin.example.com`. Values may include a
-port, but not a path, credentials, query, fragment, or wildcard. The service
-returns CORS headers only for listed origins and permits the API's `GET`,
-`POST`, and `PUT` requests with `Authorization` and `Content-Type` headers. Leave
-it empty to require the dashboard and API to share an origin.
-The network and node `PUT` bodies must be JSON objects with `"version": 1`.
+The local `.env.example` values are for development only. `.env` is ignored by
+Git. `make run` binds to `127.0.0.1` by default; the container overrides this
+with `0.0.0.0` inside its isolated network namespace.
 
-All API routes except `/healthz` require `Authorization: Bearer <key>`. The
-`GET /api/v1/join-bundle?network_id={networkID}` response contains a
-Base64URL-encoded v1 JSON bundle with that network ID; the `network_id` must
-refer to an existing managed network. Its `enrollment_token` is derived from
-the service API key and network ID; agent requests using it are limited to that
-network. The service API key remains the dashboard's management credential.
-Join bundles issued before upgrading still contain the service API key and
-remain valid with its full management access. Rotate the service API key to
-revoke them; this also invalidates previously issued network enrollment
-tokens, so issue fresh bundles to agents that need to join.
-Terminate TLS at a trusted reverse proxy before exposing the API beyond a
-trusted local development environment.
+## Configuration
 
-Use `GET`/`PUT /api/v1/networks/{networkID}/config` and
-`GET`/`PUT /api/v1/networks/{networkID}/nodes/{nodeID}/config` to pull or push
-config. Files are replaced atomically with mode `0600`. Writes are serialized
-inside one process; run a single service instance against each data file.
-Create a managed network with `POST /api/v1/networks` using a version 1 object
-with `id`, `name`, and a canonical private IPv4 WireGuard `cidr` (for example,
-`10.90.0.0/24`). The service also exposes `GET /api/v1/networks` and
-`GET /api/v1/networks/{networkID}` for listing and reading network metadata.
-Network metadata is separate from the legacy network config exchange
-`/config` endpoints.
-User-managed node config documents are stored as individual YAML files under
-`<PEERIMETER_DATA_FILE>.nodes/{networkID}/{nodeID}.yaml`; agent registrations
-are stored separately under the sibling `.registrations/` directory so a
-config upload cannot change a node's assigned address. Both directories must
-be backed up with the main data file. The REST API continues to accept and
-return version 1 JSON. Existing node config documents in the earlier single
-JSON file are migrated to this layout at startup. An authenticated
-`GET /api/v1/networks/{networkID}/nodes/{nodeID}/peers` returns the other stored
-node documents as `{ "version": 1, "peers": { "node-id": { ... } } }`. This
-endpoint is only a document exchange primitive: it does not enroll or
-authenticate individual devices, discover endpoints, or establish tunnels.
-The authenticated dashboard can request
-`GET /api/v1/networks/{networkID}/peers` to list all registered node documents
-in that network without a node-specific self ID.
-`PUT /api/v1/networks/{networkID}/nodes/{nodeID}/registration` accepts a v1
-node report (`public_key`, `listen_port`, `primary_interface`,
-`local_addresses`, and optional `public_endpoint`). For a network created with
-the API, the service atomically allocates an unused tunnel IPv4 address from
-its CIDR, returns the node document, and writes it to that node's YAML file.
-Re-registering the same node ID and public key preserves its address; using a
-different key with that ID returns a conflict. The service's static API key
-authorizes management operations. Join bundles carry a derived enrollment
-token that authorizes agent requests only for the bundle's network.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
+| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | Main data file; node and registration directories are derived alongside it. |
+| `PEERIMETER_LISTEN_ADDR` | `127.0.0.1` | Bind address. Set to `0.0.0.0` in a container. |
+| `PORT` | `8080` | HTTP port. |
+| `PEERIMETER_PUBLIC_API_URL` | Empty | Public API URL included in join bundles; required for bundle creation. |
+| `PEERIMETER_REQUIRE_HTTPS` | `true` | Require HTTPS for the public URL in join bundles. Disable only for local or trusted private use. |
+| `PEERIMETER_CORS_ALLOWED_ORIGINS` | Empty | Optional comma-separated exact HTTP(S) origins. Wildcards and paths are rejected. |
 
-Pull requests build the image but do not publish it. On `main`, Conventional
-Commit messages determine whether a release is due: `feat` increments minor,
-`fix` and related patch types increment patch, and `BREAKING CHANGE` increments
-major. A release run publishes both `vX.Y.Z` and `X.Y.Z` tags for
-`linux/amd64` and `linux/arm64` at
-`ghcr.io/peerimeter/peerimeter-service`. The first main run seeds `v0.0.0` as
-the history baseline; commits without a version bump do not publish an image.
+Use a trusted reverse proxy for TLS before exposing the service beyond a
+trusted local development environment. The service uses one shared static
+management key; enrollment tokens are derived from it and scoped to one network.
+Rotating the key invalidates existing join bundles and enrollment tokens, so
+issue fresh bundles to agents that should remain connected.
+
+## Container image and releases
+
+The service image is published as
+`ghcr.io/peerimeter/peerimeter-service` for `linux/amd64` and `linux/arm64`.
+Pull requests build but do not publish images. Main branch releases publish
+versioned tags (`vX.Y.Z` and `X.Y.Z`) when Conventional Commit history requires
+a release.
