@@ -10,8 +10,9 @@ projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 
 The service stores network metadata and configuration in a local JSON file,
 with node configuration and registrations in adjacent directories. Writes are
-serialized and replaced atomically within one process. Run one service instance
-per data file. PostgreSQL, MQTT coordination, user accounts, and multi-instance
+serialized and replaced atomically within one process. Use one service instance
+and one data file per directory because node and registration directories are
+shared siblings. PostgreSQL, MQTT coordination, user accounts, and multi-instance
 locking are not included.
 
 ## Quick start with Docker Compose
@@ -166,7 +167,7 @@ with `0.0.0.0` inside its isolated network namespace.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
-| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | Main data file; node and registration directories are derived alongside it. |
+| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | Main data file; use one data file per directory because sibling `nodes/` and `registrations/` directories are shared. |
 | `PEERIMETER_LISTEN_ADDR` | `127.0.0.1` | Bind address. Set to `0.0.0.0` in a container. |
 | `PORT` | `8080` | HTTP port. |
 | `PEERIMETER_PUBLIC_API_URL` | Empty | Public API URL included in join bundles; required for bundle creation. |
