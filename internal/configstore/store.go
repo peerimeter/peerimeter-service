@@ -108,7 +108,7 @@ func Open(path string, queueSize int) (*Store, error) {
 }
 
 func (s *Store) loadNodeFiles() error {
-	root := s.path + ".nodes"
+	root := s.nodeDir()
 	networks, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -156,10 +156,16 @@ func (s *Store) loadNodeFiles() error {
 }
 
 func (s *Store) loadRegistrationFiles() error {
-	root := s.path + ".registrations"
+	root := s.registrationDir()
 	networks, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		// Read the old location so existing deployments keep their registrations
+		// after upgrading. New writes go to the cleaner sibling directory.
+		root = s.path + ".registrations"
+		networks, err = os.ReadDir(root)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("read node registration directory: %w", err)
@@ -209,7 +215,7 @@ func (s *Store) migrateLegacyNodes() error {
 			if !validID(networkID) || !validID(nodeID) {
 				return fmt.Errorf("invalid network or node ID in legacy configuration")
 			}
-			path := filepath.Join(s.path+".nodes", networkID, nodeID+".yaml")
+			path := filepath.Join(s.nodeDir(), networkID, nodeID+".yaml")
 			if _, err := os.Stat(path); err == nil {
 				continue
 			} else if !errors.Is(err, os.ErrNotExist) {
@@ -548,11 +554,19 @@ func (s *Store) persist(state fileState) (bool, error) {
 }
 
 func (s *Store) persistNode(networkID, nodeID string, value json.RawMessage) (bool, error) {
-	return s.persistYAML(s.path+".nodes", networkID, nodeID, value)
+	return s.persistYAML(s.nodeDir(), networkID, nodeID, value)
+}
+
+func (s *Store) nodeDir() string {
+	return filepath.Join(filepath.Dir(s.path), "nodes")
 }
 
 func (s *Store) persistRegistration(networkID, nodeID string, value json.RawMessage) (bool, error) {
-	return s.persistYAML(s.path+".registrations", networkID, nodeID, value)
+	return s.persistYAML(s.registrationDir(), networkID, nodeID, value)
+}
+
+func (s *Store) registrationDir() string {
+	return filepath.Join(filepath.Dir(s.path), "registrations")
 }
 
 func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessage) (bool, error) {
