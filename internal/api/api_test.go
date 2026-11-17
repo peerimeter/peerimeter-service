@@ -299,7 +299,7 @@ func TestRejectsPathLikeNetworkAndNodeIDs(t *testing.T) {
 	}
 }
 
-func TestJoinBundleCarriesStaticKeyAndNetwork(t *testing.T) {
+func TestJoinBundleCarriesNetworkScopedToken(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
 	create.Header.Set("Authorization", "Bearer test-static-key")
@@ -337,7 +337,7 @@ func TestJoinBundleCarriesStaticKeyAndNetwork(t *testing.T) {
 	if err := json.Unmarshal(decoded, &bundle); err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.NetworkID != "net-a" || bundle.Key != "test-static-key" {
+	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.NetworkID != "net-a" || bundle.Key != networkToken("test-static-key", "net-a") {
 		t.Fatalf("unexpected join bundle: %+v", bundle)
 	}
 }
