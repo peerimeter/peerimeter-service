@@ -63,9 +63,7 @@ can forward requests to `127.0.0.1:8080`.
 
 Back up the whole `data/` directory. It contains `config.json` and the adjacent
 `nodes/` and `registrations/` directories. These hold node
-documents and registration state. Existing `config.json.registrations/`
-directories are still read after upgrading; new registrations are written to
-`registrations/`.
+documents and registration state.
 
 ## API
 
