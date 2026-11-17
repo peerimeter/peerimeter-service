@@ -20,12 +20,14 @@ The repository includes a Compose setup for the published multi-architecture
 image. It binds the service to host loopback, so a trusted HTTPS reverse proxy
 can forward requests to `127.0.0.1:8080`.
 
-1. Create a deployment directory and prepare persistent storage. The container
-   runs as UID/GID `1000`:
+1. Clone this repository to the deployment host, then prepare persistent
+   storage. This provides `compose.yaml` in the deployment directory. The
+   container runs as UID/GID `1000`:
 
    ```sh
-   mkdir -p peerimeter-service/data
+   git clone https://github.com/peerimeter/peerimeter-service.git
    cd peerimeter-service
+   mkdir -p data
    sudo install -d -o 1000 -g 1000 data
    umask 077
    ```
