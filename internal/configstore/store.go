@@ -156,54 +156,51 @@ func (s *Store) loadNodeFiles() error {
 }
 
 func (s *Store) loadRegistrationFiles() error {
-	root := s.registrationDir()
-	networks, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		// Read the old location so existing deployments keep their registrations
-		// after upgrading. New writes go to the cleaner sibling directory.
-		root = s.path + ".registrations"
-		networks, err = os.ReadDir(root)
+	// Load old files first, then overlay the current directory so new files win
+	// even if a previous write created only part of the current directory.
+	for _, root := range []string{s.path + ".registrations", s.registrationDir()} {
+		networks, err := os.ReadDir(root)
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("read node registration directory: %w", err)
-	}
-	for _, networkEntry := range networks {
-		if !networkEntry.IsDir() {
 			continue
 		}
-		networkID := networkEntry.Name()
-		if !validID(networkID) {
-			return fmt.Errorf("invalid network ID in registration directory")
-		}
-		entries, err := os.ReadDir(filepath.Join(root, networkID))
 		if err != nil {
 			return fmt.Errorf("read node registration directory: %w", err)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+		for _, networkEntry := range networks {
+			if !networkEntry.IsDir() {
 				continue
 			}
-			nodeID := entry.Name()[:len(entry.Name())-len(".yaml")]
-			if !validID(nodeID) {
-				return fmt.Errorf("invalid node ID in registration directory")
+			networkID := networkEntry.Name()
+			if !validID(networkID) {
+				return fmt.Errorf("invalid network ID in registration directory")
 			}
-			data, err := os.ReadFile(filepath.Join(root, networkID, entry.Name()))
+			entries, err := os.ReadDir(filepath.Join(root, networkID))
 			if err != nil {
-				return fmt.Errorf("read node registration: %w", err)
+				return fmt.Errorf("read node registration directory: %w", err)
 			}
-			value, err := yamlDocumentToJSON(data)
-			if err != nil {
-				return fmt.Errorf("encode node registration: %w", err)
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+					continue
+				}
+				nodeID := entry.Name()[:len(entry.Name())-len(".yaml")]
+				if !validID(nodeID) {
+					return fmt.Errorf("invalid node ID in registration directory")
+				}
+				data, err := os.ReadFile(filepath.Join(root, networkID, entry.Name()))
+				if err != nil {
+					return fmt.Errorf("read node registration: %w", err)
+				}
+				value, err := yamlDocumentToJSON(data)
+				if err != nil {
+					return fmt.Errorf("encode node registration: %w", err)
+				}
+				network := s.state.Networks[networkID]
+				if network.Registrations == nil {
+					network.Registrations = make(map[string]json.RawMessage)
+				}
+				network.Registrations[nodeID] = value
+				s.state.Networks[networkID] = network
 			}
-			network := s.state.Networks[networkID]
-			if network.Registrations == nil {
-				network.Registrations = make(map[string]json.RawMessage)
-			}
-			network.Registrations[nodeID] = value
-			s.state.Networks[networkID] = network
 		}
 	}
 	return nil

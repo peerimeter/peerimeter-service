@@ -125,6 +125,41 @@ func TestMigratesLegacyNodeDocumentsToSeparateYAMLFiles(t *testing.T) {
 	}
 }
 
+func TestLoadsLegacyRegistrationsWhenNewDirectoryExists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacyDir := filepath.Join(path+".registrations", "net-a")
+	currentDir := filepath.Join(filepath.Dir(path), "registrations", "net-a")
+	for dir, files := range map[string]map[string]string{
+		legacyDir:  {"node-a.yaml": "version: 1\nsource: legacy\n", "node-b.yaml": "version: 1\nsource: legacy\n"},
+		currentDir: {"node-a.yaml": "version: 1\nsource: current\n"},
+	} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for name, contents := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	store, err := Open(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	registrations := store.state.Networks["net-a"].Registrations
+	if len(registrations) != 2 {
+		t.Fatalf("loaded %d registrations, want 2", len(registrations))
+	}
+	if !strings.Contains(string(registrations["node-a"]), `"source":"current"`) {
+		t.Fatalf("current registration did not take precedence: %s", registrations["node-a"])
+	}
+	if !strings.Contains(string(registrations["node-b"]), `"source":"legacy"`) {
+		t.Fatalf("legacy registration was not loaded: %s", registrations["node-b"])
+	}
+}
+
 func TestYAMLNodePersistencePreservesLargeJSONIntegers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	store, err := Open(path, 1)
