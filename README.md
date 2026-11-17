@@ -53,9 +53,9 @@ The network and node `PUT` bodies must be JSON objects with `"version": 1`.
 All API routes except `/healthz` require `Authorization: Bearer <key>`. The
 `GET /api/v1/join-bundle?network_id={networkID}` response contains a
 Base64URL-encoded v1 JSON bundle with that network ID; the `network_id` must
-refer to an existing managed network. Its `enrollment_token` is the same static
-API key. Anyone holding it can access all networks and nodes. This shared
-credential has no per-agent scope or expiry.
+refer to an existing managed network. Its `enrollment_token` is derived from
+the service API key and network ID; agent requests using it are limited to that
+network. The service API key remains the dashboard's management credential.
 Terminate TLS at a trusted reverse proxy before exposing the API beyond a
 trusted local development environment.
 

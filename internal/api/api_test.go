@@ -337,7 +337,7 @@ func TestJoinBundleCarriesNetworkScopedToken(t *testing.T) {
 	if err := json.Unmarshal(decoded, &bundle); err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.NetworkID != "net-a" || bundle.Key != networkToken("test-static-key", "net-a") {
+	if bundle.Version != 1 || bundle.APIURL != "https://service.example" || bundle.NetworkID != "net-a" || bundle.Key != networkToken("test-static-key", "net-a") || bundle.Key == "test-static-key" {
 		t.Fatalf("unexpected join bundle: %+v", bundle)
 	}
 }

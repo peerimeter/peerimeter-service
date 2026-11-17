@@ -347,7 +347,7 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		masterOK := a.key != "" && len(provided) == len(a.key) && subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) == 1
 		networkID := chi.URLParam(r, "networkID")
-		if networkID == "" {
+		if networkID == "" && r.URL.Path == "/api/v1/join-bundle" {
 			networkID = r.URL.Query().Get("network_id")
 		}
 		token := networkToken(a.key, networkID)
