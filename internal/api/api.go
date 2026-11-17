@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -343,12 +345,26 @@ func (a *API) listAllPeers(w http.ResponseWriter, r *http.Request) {
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if a.key == "" || provided == r.Header.Get("Authorization") || len(provided) != len(a.key) || subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) != 1 {
+		masterOK := a.key != "" && len(provided) == len(a.key) && subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) == 1
+		networkID := chi.URLParam(r, "networkID")
+		if networkID == "" {
+			networkID = r.URL.Query().Get("network_id")
+		}
+		token := networkToken(a.key, networkID)
+		networkOK := networkID != "" && len(provided) == len(token) && subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1
+		if a.key == "" || provided == r.Header.Get("Authorization") || (!masterOK && !networkOK) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func networkToken(key, networkID string) string {
+	// Derive a deterministic credential without storing per-network secrets.
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("peerimeter-enrollment-v1:" + networkID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
@@ -376,7 +392,7 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 		APIURL          string `json:"api_url"`
 		NetworkID       string `json:"network_id"`
 		EnrollmentToken string `json:"enrollment_token"`
-	}{Version: 1, APIURL: a.publicURL, NetworkID: networkID, EnrollmentToken: a.key})
+	}{Version: 1, APIURL: a.publicURL, NetworkID: networkID, EnrollmentToken: networkToken(a.key, networkID)})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create join bundle")
 		return

@@ -89,9 +89,9 @@ node report (`public_key`, `listen_port`, `primary_interface`,
 the API, the service atomically allocates an unused tunnel IPv4 address from
 its CIDR, returns the node document, and writes it to that node's YAML file.
 Re-registering the same node ID and public key preserves its address; using a
-different key with that ID returns a conflict. The current shared API key still
-authorizes every network and node operation; registration does not yet issue
-per-device credentials.
+different key with that ID returns a conflict. The service's static API key
+authorizes management operations. Join bundles carry a derived enrollment
+token that authorizes agent requests only for the bundle's network.
 
 Pull requests build the image but do not publish it. On `main`, Conventional
 Commit messages determine whether a release is due: `feat` increments minor,
