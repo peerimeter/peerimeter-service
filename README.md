@@ -56,6 +56,10 @@ Base64URL-encoded v1 JSON bundle with that network ID; the `network_id` must
 refer to an existing managed network. Its `enrollment_token` is derived from
 the service API key and network ID; agent requests using it are limited to that
 network. The service API key remains the dashboard's management credential.
+Join bundles issued before upgrading still contain the service API key and
+remain valid with its full management access. Rotate the service API key to
+revoke them; this also invalidates previously issued network enrollment
+tokens, so issue fresh bundles to agents that need to join.
 Terminate TLS at a trusted reverse proxy before exposing the API beyond a
 trusted local development environment.
 
