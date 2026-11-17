@@ -63,7 +63,7 @@ func TestConcurrentQueuedWritesPersistAcrossRestart(t *testing.T) {
 			t.Fatalf("node %d missing after restart: %v", i, err)
 		}
 	}
-	nodeFile := filepath.Join(path+".nodes", "network-a", "node-1.yaml")
+	nodeFile := filepath.Join(filepath.Dir(path), "nodes", "network-a", "node-1.yaml")
 	nodeYAML, err := os.ReadFile(nodeFile)
 	if err != nil || !strings.Contains(string(nodeYAML), `"revision": 1`) {
 		t.Fatalf("node YAML = %q, err = %v", nodeYAML, err)
@@ -120,7 +120,7 @@ func TestMigratesLegacyNodeDocumentsToSeparateYAMLFiles(t *testing.T) {
 	if _, err := store.GetNode("net-a", "node-a"); err != nil {
 		t.Fatalf("legacy node unavailable: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(path+".nodes", "net-a", "node-a.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "nodes", "net-a", "node-a.yaml")); err != nil {
 		t.Fatalf("legacy node YAML was not created: %v", err)
 	}
 }
