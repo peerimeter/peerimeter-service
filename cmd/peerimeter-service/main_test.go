@@ -98,9 +98,13 @@ func TestValidateImportIndexRejectsMissingAlternateWhenCanonicalIndexExists(t *t
 	}
 }
 
-func TestValidateImportIndexRejectsSymlinkParentPathAroundCanonicalIndex(t *testing.T) {
+func TestValidateImportIndexRejectsSymlinkParentTraversal(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte(`{"version":1}`), 0o600); err != nil {
+	archive := filepath.Join(root, "archive")
+	if err := os.MkdirAll(filepath.Join(archive, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(archive, "config.json"), []byte(`{"version":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	nodes := filepath.Join(root, "nodes")
@@ -110,14 +114,11 @@ func TestValidateImportIndexRejectsSymlinkParentPathAroundCanonicalIndex(t *test
 	if err := os.WriteFile(filepath.Join(nodes, "node-a.yaml"), []byte("valid sidecar\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "other", "sub"), 0o700); err != nil {
+	if err := os.Symlink(filepath.Join(archive, "sub"), filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(root, "other", "sub"), filepath.Join(root, "link")); err != nil {
-		t.Fatal(err)
-	}
-	indexPath := root + string(os.PathSeparator) + "link" + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "config.json"
-	if err := validateImportIndex(indexPath, true); err == nil || !strings.Contains(err.Error(), "config.json exists") {
-		t.Fatalf("sidecar-only import error = %v, want canonical config.json error", err)
+	indexPath := root + string(os.PathSeparator) + "link" + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "typo.json"
+	if err := validateImportIndex(indexPath, true); err == nil || !strings.Contains(err.Error(), "cannot contain '..'") {
+		t.Fatalf("sidecar-only import error = %v, want ambiguous path error", err)
 	}
 }
