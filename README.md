@@ -8,14 +8,15 @@ projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 
 ## Current status
 
-The service supports two selectable persistence backends. The default `file`
-backend stores network metadata/configuration in JSON and node configuration
-and registrations in adjacent directories; it is intended for single-process
-development and small deployments. The `postgres` backend stores all four
-document types in PostgreSQL JSONB and applies versioned Goose SQL migrations
-on startup. PostgreSQL transactions protect network CIDR checks and concurrent
-address allocation. MQTT coordination, user accounts, and multi-instance API
-authorization are not included.
+The service supports two selectable persistence backends. The service's
+environment default is `file`, which stores network metadata/configuration in
+JSON and node configuration and registrations in adjacent directories. It is
+intended for local development and single-process deployments. Docker Compose
+defaults to `postgres`, which stores all four document types in PostgreSQL
+JSONB and applies versioned Goose SQL migrations on startup. PostgreSQL
+transactions protect network CIDR checks and concurrent address allocation.
+MQTT coordination, user accounts, and multi-instance API authorization are
+not included.
 
 ## Quick start with Docker Compose
 
@@ -23,27 +24,33 @@ The repository includes a Compose setup for the published multi-architecture
 image. It binds the service to host loopback, so a trusted HTTPS reverse proxy
 can forward requests to `127.0.0.1:8080`.
 
-1. Clone this repository to the deployment host, then prepare persistent
-   storage. This provides `compose.yaml` in the deployment directory. The
-   container runs as UID/GID `1000`:
+1. Clone this repository to the deployment host. This provides `compose.yaml`
+   in the deployment directory. Create the optional file-backend/import
+   directory if needed. The service container runs as UID/GID `1000`:
 
    ```sh
    git clone https://github.com/peerimeter/peerimeter-service.git
    cd peerimeter-service
+   umask 077
    mkdir -p data
    sudo install -d -o 1000 -g 1000 data
-   umask 077
    ```
 
-2. Create `.env` next to `compose.yaml`, using a released image tag and a unique
-   API key:
+2. Create `.env` next to `compose.yaml`, with unique API/database credentials
+   and a released service image tag:
 
    ```sh
-   cat > .env <<'EOF'
+   POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+   PEERIMETER_API_KEY="$(openssl rand -hex 32)"
+   cat > .env <<EOF
    SERVICE_IMAGE_TAG=replace-with-a-release-tag
-   PEERIMETER_API_KEY=replace-with-a-unique-random-secret
    PEERIMETER_PUBLIC_API_URL=https://service.example.com
+   POSTGRES_USER=peerimeter
+   POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+   POSTGRES_DB=peerimeter
+   PEERIMETER_API_KEY=$PEERIMETER_API_KEY
    EOF
+   unset POSTGRES_PASSWORD PEERIMETER_API_KEY
    chmod 600 .env
    ```
 
@@ -52,7 +59,7 @@ can forward requests to `127.0.0.1:8080`.
    [GitHub Releases](https://github.com/peerimeter/peerimeter-service/releases).
    Keep `.env` private and out of version control.
 
-3. Start the service:
+3. Start the service and PostgreSQL database:
 
    ```sh
    docker compose pull
@@ -64,13 +71,21 @@ can forward requests to `127.0.0.1:8080`.
    and terminate HTTPS there. `PEERIMETER_PUBLIC_API_URL` must be the public
    HTTPS URL agents will use.
 
-Back up the whole `data/` directory. It contains `config.json` and the adjacent
-`nodes/` and `registrations/` directories. These hold node
-documents and registration state.
+Compose uses the PostgreSQL backend and a persistent `postgres-data` volume by
+default. Back up the database with:
 
-To use PostgreSQL, set `PEERIMETER_STORAGE_BACKEND=postgres` and
-`PEERIMETER_DATABASE_URL` in `.env` before starting Compose. The service runs
-embedded Goose migrations at startup. The file backend remains the default.
+```sh
+docker compose exec -T postgres pg_dump -U peerimeter peerimeter > peerimeter.sql
+```
+
+If you choose the file backend, back up the whole `data/` directory. It
+contains `config.json` and adjacent `nodes/` and `registrations/` directories.
+
+To use the file backend in Compose, set `PEERIMETER_STORAGE_BACKEND=file` in
+`.env`; the application will then use `PEERIMETER_DATA_FILE`. For a remote
+PostgreSQL or Supabase database, set `PEERIMETER_STORAGE_BACKEND=postgres` and
+provide `PEERIMETER_DATABASE_URL` with TLS enabled. The service runs embedded
+Goose migrations at startup.
 To import an existing file store, set `PEERIMETER_IMPORT_FILE` to its
 `config.json` path on a one-time startup. Import copies the network metadata,
 network config, node configs, and registrations in one transaction, and refuses
@@ -186,10 +201,13 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
-| `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`. |
-| `PEERIMETER_DATABASE_URL` | Empty | PostgreSQL connection URL; required when the backend is `postgres`. Use TLS for remote databases. |
+| `PEERIMETER_STORAGE_BACKEND` | `file` in the service; `postgres` in Compose | Persistence selection: `file` or `postgres`. |
+| `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Use TLS for remote databases. |
 | `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source `config.json`; import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
 | `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |
+| `POSTGRES_USER` | `peerimeter` in Compose | User for the bundled PostgreSQL service. |
+| `POSTGRES_PASSWORD` | Required by Compose | Unique high-entropy password for the bundled PostgreSQL service. |
+| `POSTGRES_DB` | `peerimeter` in Compose | Database created for the bundled PostgreSQL service. |
 | `PEERIMETER_LISTEN_ADDR` | `127.0.0.1` | Bind address. Set to `0.0.0.0` in a container. |
 | `PORT` | `8080` | HTTP port. |
 | `PEERIMETER_PUBLIC_API_URL` | Empty | Public API URL included in join bundles; required for bundle creation. |
