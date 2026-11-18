@@ -104,8 +104,9 @@ and server name. Publicly trusted certificates work without extra setup.
 
 If the database uses a private CA that the container does not already trust,
 mount the CA certificate read-only. The service needs it to verify the database;
-a host file is not visible inside the container by default. Add this under
-`peerimeter-service.volumes` in `compose.yaml`, replacing the host path:
+a host file is not visible inside the container by default. Add this under the
+`peerimeter-service` service in the existing `compose.yaml`; do not replace the
+file with this snippet. Replace the host path with the path to your CA file:
 
 ```yaml
       - /absolute/path/private-ca.pem:/run/peerimeter/private-ca.pem:ro
@@ -113,7 +114,9 @@ a host file is not visible inside the container by default. Add this under
 
 Add `sslrootcert=%2Frun%2Fpeerimeter%2Fprivate-ca.pem` to
 `PEERIMETER_DATABASE_URL`. Prefix it with `?` for the first URL parameter or
-`&` when the URL already has parameters.
+`&` when the URL already has parameters. The container user (UID/GID
+`1000:1000`, or its mapped host user) must be able to read the CA file; `:ro`
+prevents writes but does not grant read access.
 
 ### Back up your data
 
@@ -122,9 +125,10 @@ For file storage, back up the whole `data/` directory. It contains
 
 The bundled PostgreSQL database can be backed up with `pg_dump`. This command
 targets the database named by `POSTGRES_DB`; use it only when
-`PEERIMETER_DATABASE_URL` is unset or selects that same database. It writes to
-a new owner-only temporary file and replaces the previous backup only after
-the dump succeeds:
+`PEERIMETER_DATABASE_URL` is unset or selects that same database on the bundled
+PostgreSQL instance. A matching database name on a remote server is not enough.
+It writes to a new owner-only temporary file and replaces the previous backup
+only after the dump succeeds:
 
 ```sh
 backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
@@ -188,13 +192,16 @@ container is not available to the host client. Keep `sslmode=verify-full`.
 5. For a sidecar-only store without `config.json`, also set
    `PEERIMETER_IMPORT_SIDECAR_ONLY=true`. This option is accepted only when
    node or registration sidecar files exist.
-6. Start the service to import the data. The importer copies network metadata,
-   network config, node configs, and registrations in one transaction, and
-   requires empty PostgreSQL tables. It warns if file data exists without an
-   import path. Keep the original files until you verify the imported data and
-   back up the database.
-7. After a successful import, remove both import settings from `.env` and run
-   `docker compose up -d peerimeter-service` to recreate the container. A
+6. Start the service while the import settings are still in `.env`:
+   `docker compose up -d peerimeter-service`. The importer copies network
+   metadata, network config, node configs, and registrations in one transaction,
+   and requires empty PostgreSQL tables. It warns if file data exists without
+   an import path.
+7. Check `docker compose logs peerimeter-service` for the successful import
+   message (`imported file store into empty PostgreSQL database`), then verify
+   the imported data. Keep the original files and back up the database. Remove
+   both import settings from `.env`.
+8. Recreate the container with `docker compose up -d peerimeter-service`. A
    restart alone does not apply `.env` changes.
 
 The index file must exist and be a regular file unless you are importing a
