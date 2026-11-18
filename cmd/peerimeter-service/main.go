@@ -26,6 +26,20 @@ func main() {
 		logger.Error("load configuration", "error", err)
 		os.Exit(2)
 	}
+	var importSnapshot configstore.Snapshot
+	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
+		legacy, err := configstore.Open(cfg.ImportFile, 128)
+		if err != nil {
+			logger.Error("open file store for import", "error", err)
+			os.Exit(1)
+		}
+		importSnapshot = legacy.Snapshot()
+		legacy.Close()
+		if importSnapshot.Empty() {
+			logger.Error("import file store into PostgreSQL", "error", "source contains no persisted network, node, or registration data")
+			os.Exit(1)
+		}
+	}
 
 	var store interface {
 		GetNetwork(string) (json.RawMessage, error)
@@ -46,14 +60,7 @@ func main() {
 			os.Exit(1)
 		}
 		if cfg.ImportFile != "" {
-			legacy, err := configstore.Open(cfg.ImportFile, 128)
-			if err != nil {
-				logger.Error("open file store for import", "error", err)
-				_ = db.Close()
-				os.Exit(1)
-			}
-			err = db.ImportSnapshot(context.Background(), legacy.Snapshot())
-			legacy.Close()
+			err = db.ImportSnapshot(context.Background(), importSnapshot)
 			if err != nil {
 				logger.Error("import file store into PostgreSQL", "error", err)
 				_ = db.Close()

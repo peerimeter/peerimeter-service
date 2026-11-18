@@ -7,15 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
 	"net/netip"
 	"strings"
 
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 //go:embed migrations/*.sql
@@ -49,7 +54,12 @@ type registrationRow struct {
 func (registrationRow) TableName() string { return "registrations" }
 
 func Open(databaseURL string) (*Store, error) {
-	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{})
+	dbLogger := gormlogger.New(log.New(io.Discard, "", 0), gormlogger.Config{
+		LogLevel:                  gormlogger.Silent,
+		IgnoreRecordNotFoundError: true,
+		ParameterizedQueries:      true,
+	})
+	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{Logger: dbLogger})
 	if err != nil {
 		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
@@ -61,12 +71,22 @@ func Open(databaseURL string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
-	goose.SetBaseFS(migrationFiles)
-	if err := goose.SetDialect("postgres"); err != nil {
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("open embedded PostgreSQL migrations: %w", err)
+	}
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("configure PostgreSQL migration lock: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations, goose.WithSessionLocker(locker))
+	if err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("configure PostgreSQL migrations: %w", err)
 	}
-	if err := goose.Up(sqlDB, "migrations"); err != nil {
+	if _, err := provider.Up(context.Background()); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("apply PostgreSQL migrations: %w", err)
 	}
@@ -84,6 +104,9 @@ func (s *Store) Close() error {
 // ImportSnapshot copies the legacy file store into an empty PostgreSQL database.
 // It is all-or-nothing and refuses to merge or overwrite an existing database.
 func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapshot) error {
+	if snapshot.Empty() {
+		return errors.New("file store import source is empty")
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x70656572696d6574)).Error; err != nil {
 			return err
