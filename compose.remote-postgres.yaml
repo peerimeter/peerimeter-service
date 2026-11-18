@@ -1,5 +1,0 @@
-services:
-  peerimeter-service:
-    environment:
-      PEERIMETER_STORAGE_BACKEND: postgres
-      PEERIMETER_DATABASE_URL: ${PEERIMETER_DATABASE_URL:?Set PEERIMETER_DATABASE_URL with sslmode=verify-full}
