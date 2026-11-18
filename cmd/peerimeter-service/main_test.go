@@ -31,3 +31,32 @@ func TestFileStoreMayContainData(t *testing.T) {
 		t.Fatal("registration sidecar data was not detected")
 	}
 }
+
+func TestValidateImportIndexAllowsExplicitSidecarOnlySource(t *testing.T) {
+	root := t.TempDir()
+	index := filepath.Join(root, "config.json")
+	if err := os.WriteFile(index, []byte(`{"version":1,"networks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(index, true); err == nil {
+		t.Fatal("sidecar-only mode accepted with an index file")
+	}
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(index, false); err == nil {
+		t.Fatal("missing index was accepted without sidecar-only mode")
+	}
+	if err := os.Mkdir(filepath.Join(root, "nodes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nodes", "legacy.yaml"), []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(index, false); err == nil {
+		t.Fatal("sidecar-only source was accepted without explicit mode")
+	}
+	if err := validateImportIndex(index, true); err != nil {
+		t.Fatalf("explicit sidecar-only source rejected: %v", err)
+	}
+}

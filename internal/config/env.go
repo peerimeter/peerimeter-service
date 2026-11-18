@@ -15,6 +15,7 @@ type Config struct {
 	StorageBackend     string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
 	DatabaseURL        string `env:"PEERIMETER_DATABASE_URL"`
 	ImportFile         string `env:"PEERIMETER_IMPORT_FILE"`
+	ImportSidecarOnly  bool   `env:"PEERIMETER_IMPORT_SIDECAR_ONLY"`
 	DataFile           string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
 	ListenAddr         string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
 	PublicAPIURL       string `env:"PEERIMETER_PUBLIC_API_URL"`
@@ -37,6 +38,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "postgres" && strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_URL must be set when PEERIMETER_STORAGE_BACKEND=postgres")
+	}
+	if cfg.ImportSidecarOnly && (cfg.StorageBackend != "postgres" || strings.TrimSpace(cfg.ImportFile) == "") {
+		return Config{}, fmt.Errorf("PEERIMETER_IMPORT_SIDECAR_ONLY requires PostgreSQL storage and PEERIMETER_IMPORT_FILE")
 	}
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		origin := strings.TrimSpace(raw)
