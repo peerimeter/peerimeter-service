@@ -11,12 +11,14 @@ projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 The service supports two selectable persistence backends. The service's
 environment default is `file`, which stores network metadata/configuration in
 JSON and node configuration and registrations in adjacent directories. It is
-intended for local development and single-process deployments. The base Compose
-file uses the file backend; `compose.postgres.yaml` adds a PostgreSQL 18 Alpine
-database and selects the `postgres` backend. A separate overlay supports a
-remote PostgreSQL or Supabase database. PostgreSQL stores all four document
-types in JSONB and applies versioned Goose SQL migrations on startup.
-Transactions protect network CIDR checks and concurrent address allocation.
+intended for local development and single-process deployments. The single
+`compose.yaml` includes the service and the digest-pinned
+`postgres:18.7-alpine3.24` database. Set
+`PEERIMETER_STORAGE_BACKEND=file` or `postgres` to select storage; set
+`PEERIMETER_DATABASE_URL` to use remote PostgreSQL or Supabase. PostgreSQL
+stores all four document types in JSONB and applies versioned Goose SQL
+migrations on startup. Transactions protect network CIDR checks and concurrent
+address allocation.
 MQTT coordination, user accounts, and multi-instance API authorization are
 not included.
 
@@ -26,9 +28,8 @@ The repository includes a Compose setup for the published multi-architecture
 image. It binds the service to host loopback, so a trusted HTTPS reverse proxy
 can forward requests to `127.0.0.1:8080`.
 
-1. Clone this repository to the deployment host. This provides `compose.yaml`
-   in the deployment directory. Create the optional file-backend/import
-   directory if needed. The service container runs as UID/GID `1000`:
+1. Clone this repository to the deployment host. The service container runs
+   as UID/GID `1000`:
 
    ```sh
    git clone https://github.com/peerimeter/peerimeter-service.git
@@ -37,6 +38,10 @@ can forward requests to `127.0.0.1:8080`.
    mkdir -p data
    sudo install -d -o 1000 -g 1000 data
    ```
+
+   This ownership is for Docker without user namespace remapping. With rootless
+   Docker or `userns-remap`, assign `data/` to the host UID and GID that map to
+   container UID/GID `1000:1000`.
 
 2. Create `.env` next to `compose.yaml`, with unique API/database credentials
    and a released service image tag:
@@ -59,48 +64,91 @@ can forward requests to `127.0.0.1:8080`.
    Generate the key with `openssl rand -hex 32`. Replace the example image tag
    with a version published at
    [GitHub Releases](https://github.com/peerimeter/peerimeter-service/releases).
-   Keep `.env` private and out of version control.
+   PostgreSQL storage requires a service release that includes PostgreSQL
+   support. Earlier tags, including `v0.6.1`, predate PostgreSQL support; use
+   the first PostgreSQL-capable release once published. Keep `.env` private and
+   out of version control.
 
 3. Start the service and bundled PostgreSQL database:
 
    ```sh
-   docker compose -f compose.yaml -f compose.postgres.yaml pull
-   docker compose -f compose.yaml -f compose.postgres.yaml up -d
-   docker compose -f compose.yaml -f compose.postgres.yaml logs -f peerimeter-service
+   docker compose pull
+   docker compose up -d
+   docker compose logs -f peerimeter-service
    ```
 
    Configure the reverse proxy to use `http://127.0.0.1:8080` as its upstream
    and terminate HTTPS there. `PEERIMETER_PUBLIC_API_URL` must be the public
    HTTPS URL agents will use.
 
-The PostgreSQL overlay stores data in a persistent `postgres-data` volume.
+The PostgreSQL service stores data in a persistent `postgres-data` volume.
 Back up the database without replacing a previous backup if the dump fails:
 
 ```sh
-docker compose -f compose.yaml -f compose.postgres.yaml exec -T postgres \
-  sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > peerimeter.sql.tmp \
-  && mv peerimeter.sql.tmp peerimeter.sql
+backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
+if docker compose exec -T postgres \
+  sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$backup_tmp"; then
+  mv "$backup_tmp" peerimeter.sql
+else
+  rm -f "$backup_tmp"
+  exit 1
+fi
+```
+
+`mktemp` creates a unique owner-only file in the destination directory. The
+command above backs up the database named by `POSTGRES_DB` in the bundled
+container. Use it only when `PEERIMETER_DATABASE_URL` is unset or points to
+that same database. For a remote URL or any other database, install the
+PostgreSQL client and dump the URL itself to a unique temporary file before
+replacing the previous backup:
+
+```sh
+backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
+if pg_dump "$PEERIMETER_DATABASE_URL" > "$backup_tmp"; then
+  mv "$backup_tmp" peerimeter.sql
+else
+  rm -f "$backup_tmp"
+  exit 1
+fi
 ```
 
 If you choose the file backend, back up the whole `data/` directory. It
 contains `config.json` and adjacent `nodes/` and `registrations/` directories.
 
-For file storage, run `docker compose -f compose.yaml up -d`. For a remote
-PostgreSQL or Supabase database, set `PEERIMETER_DATABASE_URL` in `.env` with
-`sslmode=verify-full` and run:
-
-```sh
-docker compose -f compose.yaml -f compose.remote-postgres.yaml up -d
-```
+Set `PEERIMETER_STORAGE_BACKEND=file` in `.env` to use file storage. For a
+remote PostgreSQL or Supabase database, set `PEERIMETER_STORAGE_BACKEND=postgres`
+and `PEERIMETER_DATABASE_URL` with `sslmode=verify-full`, then run:
+`docker compose up -d`. Use a direct connection or Supabase Session pooler URL;
+transaction pooler URLs do not preserve the session needed by Goose migrations.
 
 Remote connections without certificate and hostname verification are rejected.
 `sslmode=disable` is accepted only for local development hosts (`localhost`,
 loopback addresses, or the bundled Compose `postgres` service). The bundled
-database URL is built from `POSTGRES_*`; use URI-safe credentials such as the
-generated hexadecimal password, or provide `PEERIMETER_DATABASE_URL` with
-percent-encoded credentials.
+database container starts in every Compose mode so one file covers file, bundled
+PostgreSQL, and remote PostgreSQL selections. Its URL is built from
+`POSTGRES_*`; use URI-safe credentials such as the generated hexadecimal
+password, or provide `PEERIMETER_DATABASE_URL` with percent-encoded credentials.
 The service runs embedded Goose migrations at startup.
-To import an existing file store, set `PEERIMETER_IMPORT_FILE` to its
+
+Publicly trusted database certificates need no extra mount. For a private CA,
+add this read-only bind mount under `peerimeter-service.volumes` in
+`compose.yaml`, then set `sslrootcert` to that in-container path in the URL:
+
+```yaml
+      - /absolute/path/private-ca.pem:/run/peerimeter/private-ca.pem:ro
+```
+
+Append `&sslrootcert=%2Frun%2Fpeerimeter%2Fprivate-ca.pem` to
+`PEERIMETER_DATABASE_URL` (or use `?sslrootcert=...` if it has no query string).
+
+To import an existing file store, stop its writer and copy `config.json` plus
+the sibling `nodes/` and `registrations/` directories, if present, into the
+Compose `data/` mount. For the source setup in the hosted guide, the default is
+`$HOME/.local/share/peerimeter`; copy that directory’s contents, including
+`config.json`, `nodes/`, and `registrations/` when present. If the store is
+already in `data/`, skip the copy. Make the copied files readable by container
+UID/GID `1000:1000` (or the mapped host IDs for rootless/remapped Docker). Then
+set `PEERIMETER_IMPORT_FILE` to its
 `config.json` path on a one-time startup. With the default Compose mount, use
 `/var/lib/peerimeter/config.json`; host relative paths are not visible in the
 container. Stop every file-backed service or process that can write to the
@@ -111,7 +159,9 @@ configured. Import copies the network metadata,
 network config, node configs, and registrations in one transaction, and refuses
 to run unless the PostgreSQL tables are empty. Keep the original files until
 you have verified the imported data and backed up the database. Remove
-`PEERIMETER_IMPORT_FILE` after a successful import.
+`PEERIMETER_IMPORT_FILE` after a successful import, then run
+`docker compose up -d peerimeter-service` to recreate the container with the
+updated environment. A plain `docker compose restart` does not apply `.env` changes.
 
 ## API
 
@@ -221,7 +271,7 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
-| `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`; the PostgreSQL Compose overlay selects `postgres`. |
+| `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`. |
 | `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`; local development can use `sslmode=disable`. |
 | `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source `config.json`; import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
 | `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |

@@ -2,6 +2,7 @@ package postgresstore
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/binary"
 	"encoding/json"
@@ -12,9 +13,9 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"net/url"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -99,33 +100,56 @@ func Open(databaseURL string) (*Store, error) {
 }
 
 func validateTLSMode(databaseURL string) error {
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || parsed.Hostname() == "" {
+	config, err := pgconn.ParseConfig(databaseURL)
+	if err != nil {
+		return errors.New("PostgreSQL URL is invalid")
+	}
+	endpoints := make([]pgEndpoint, 0, 1+len(config.Fallbacks))
+	endpoints = append(endpoints, pgEndpoint{host: config.Host, tls: config.TLSConfig})
+	for _, fallback := range config.Fallbacks {
+		endpoints = append(endpoints, pgEndpoint{host: fallback.Host, tls: fallback.TLSConfig})
+	}
+	if len(endpoints) == 0 {
 		return errors.New("PostgreSQL URL must include a valid host")
 	}
-	hosts := parsed.Query()["host"]
-	if len(hosts) == 0 {
-		hosts = []string{parsed.Hostname()}
-	}
-	mode := parsed.Query().Get("sslmode")
-	if mode == "disable" {
-		for _, list := range hosts {
-			for _, host := range strings.Split(list, ",") {
-				if !isLocalDatabaseHost(host) {
-					return errors.New("sslmode=disable is allowed only for local development hosts")
-				}
+	allTLSDisabled := true
+	allTLSVerified := true
+	allHostsLocal := true
+	for _, endpoint := range endpoints {
+		if endpoint.tls != nil {
+			allTLSDisabled = false
+			if endpoint.tls.InsecureSkipVerify || endpoint.tls.ServerName == "" {
+				allTLSVerified = false
 			}
+		} else {
+			allTLSVerified = false
 		}
+		if !isLocalDatabaseHost(endpoint.host) {
+			allHostsLocal = false
+		}
+	}
+	if allTLSDisabled && allHostsLocal {
 		return nil
 	}
-	if mode != "verify-full" {
-		return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=disable is allowed only for local development hosts")
+	if allTLSVerified {
+		return nil
 	}
-	return nil
+	return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=disable is allowed only for local development hosts")
+}
+
+type pgEndpoint struct {
+	host string
+	tls  *tls.Config
 }
 
 func isLocalDatabaseHost(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
+	if hostPort := net.ParseIP(host); hostPort != nil {
+		return hostPort.IsLoopback()
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
 	if host == "localhost" || host == "postgres" {
 		return true
 	}
