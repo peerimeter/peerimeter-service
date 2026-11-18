@@ -84,10 +84,16 @@ contains `config.json` and adjacent `nodes/` and `registrations/` directories.
 To use the file backend in Compose, set `PEERIMETER_STORAGE_BACKEND=file` in
 `.env`; the application will then use `PEERIMETER_DATA_FILE`. For a remote
 PostgreSQL or Supabase database, set `PEERIMETER_STORAGE_BACKEND=postgres` and
-provide `PEERIMETER_DATABASE_URL` with TLS enabled. The service runs embedded
-Goose migrations at startup.
+provide `PEERIMETER_DATABASE_URL` with `sslmode=verify-full`. Remote connections
+without certificate and hostname verification are rejected. `sslmode=disable`
+is accepted only for local development hosts (`localhost`, loopback addresses,
+or the Compose `postgres` service). The service runs embedded Goose migrations
+at startup.
 To import an existing file store, set `PEERIMETER_IMPORT_FILE` to its
-`config.json` path on a one-time startup. Import copies the network metadata,
+`config.json` path on a one-time startup. Stop every file-backed service or
+process that can write to the store before starting the import; the importer
+reads a snapshot and does not coordinate with file-backed writers. The index
+file must exist and be a regular file. Import copies the network metadata,
 network config, node configs, and registrations in one transaction, and refuses
 to run unless the PostgreSQL tables are empty. Keep the original files until
 you have verified the imported data and backed up the database. Remove
@@ -193,7 +199,7 @@ with `0.0.0.0` inside its isolated network namespace.
 database because they apply migrations and write records:
 
 ```sh
-PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=require' make test-integration
+PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=verify-full' make test-integration
 ```
 
 ## Configuration
@@ -202,7 +208,7 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
 | `PEERIMETER_STORAGE_BACKEND` | `file` in the service; `postgres` in Compose | Persistence selection: `file` or `postgres`. |
-| `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Use TLS for remote databases. |
+| `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`; local development can use `sslmode=disable`. |
 | `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source `config.json`; import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
 | `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |
 | `POSTGRES_USER` | `peerimeter` in Compose | User for the bundled PostgreSQL service. |
