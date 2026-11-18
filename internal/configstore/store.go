@@ -63,6 +63,16 @@ type SnapshotNetwork struct {
 	Registrations map[string]json.RawMessage
 }
 
+// Empty reports whether the snapshot contains any persisted network, node, or registration data.
+func (s Snapshot) Empty() bool {
+	for _, network := range s.Networks {
+		if len(network.Metadata) != 0 || len(network.Config) != 0 || len(network.Nodes) != 0 || len(network.Registrations) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 type write struct {
 	kind      operationKind
 	networkID string

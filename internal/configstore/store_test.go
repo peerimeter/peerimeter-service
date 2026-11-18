@@ -100,7 +100,8 @@ func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
 	if err := store.CreateNetwork(ctx, "mesh", json.RawMessage(`{"id":"mesh","name":"Mesh","cidr":"10.90.0.0/24"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutNetwork(ctx, "mesh", json.RawMessage(`{"version":1,"name":"config"}`)); err != nil {
+	const originalConfig = `{"version":1,"name":"config"}`
+	if err := store.PutNetwork(ctx, "mesh", json.RawMessage(originalConfig)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutNode(ctx, "mesh", "node-a", json.RawMessage(`{"version":1,"name":"node"}`)); err != nil {
@@ -115,8 +116,28 @@ func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
 		t.Fatalf("incomplete snapshot: %#v", network)
 	}
 	network.Config[0] = 'x'
-	if _, err := store.GetNetwork("mesh"); err != nil {
+	stored, err := store.GetNetwork("mesh")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if string(stored) != originalConfig {
+		t.Fatalf("stored config changed through snapshot alias: got %s, want %s", stored, originalConfig)
+	}
+}
+
+func TestSnapshotEmptyRecognizesNodeAndRegistrationDocuments(t *testing.T) {
+	if !(Snapshot{}).Empty() {
+		t.Fatal("empty snapshot reported non-empty")
+	}
+	for name, snapshot := range map[string]Snapshot{
+		"node config":  {Networks: map[string]SnapshotNetwork{"mesh": {Nodes: map[string]json.RawMessage{"node": json.RawMessage(`{"version":1}`)}}}},
+		"registration": {Networks: map[string]SnapshotNetwork{"mesh": {Registrations: map[string]json.RawMessage{"node": json.RawMessage(`{"public_key":"key"}`)}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if snapshot.Empty() {
+				t.Fatal("snapshot with persisted documents reported empty")
+			}
+		})
 	}
 }
 
