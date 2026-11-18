@@ -19,8 +19,9 @@ intended for local development and single-process deployments. The single
 stores all four document types in JSONB and applies versioned Goose SQL
 migrations on startup by default. Set `PEERIMETER_AUTO_MIGRATE=false` to disable
 startup migrations, then run `peerimeter-service migrate` (or `make migrate` for
-local development) to apply them explicitly. Transactions protect network CIDR
-checks and concurrent address allocation.
+local development) to apply them explicitly. Start the HTTP service with the
+`serve` command. Transactions protect network CIDR checks and concurrent
+address allocation.
 MQTT coordination, user accounts, and multi-instance API authorization are
 not included.
 
@@ -359,8 +360,9 @@ Stop PostgreSQL with `devbox run postgres-down`. Its data stays in the ignored
 `$TMPDIR` for compatibility with Unix socket path limits.
 
 The local `.env.example` values are for development only. `.env` is ignored by
-Git. `make run` binds to `127.0.0.1` by default; the container overrides this
-with `0.0.0.0` inside its isolated network namespace.
+Git. `make run` starts the `serve` command and binds to `127.0.0.1` by default;
+the container overrides this with `0.0.0.0` inside its isolated network
+namespace. Run `make migrate` to apply pending database migrations manually.
 
 `make test` runs unit tests. PostgreSQL integration tests use a dedicated
 database because they apply migrations and write records:
