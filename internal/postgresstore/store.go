@@ -103,19 +103,36 @@ func validateTLSMode(databaseURL string) error {
 	if err != nil || parsed.Hostname() == "" {
 		return errors.New("PostgreSQL URL must include a valid host")
 	}
-	host := strings.ToLower(parsed.Hostname())
-	local := host == "localhost" || host == "postgres"
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		local = true
+	hosts := parsed.Query()["host"]
+	if len(hosts) == 0 {
+		hosts = []string{parsed.Hostname()}
 	}
 	mode := parsed.Query().Get("sslmode")
-	if local && mode == "disable" {
+	if mode == "disable" {
+		for _, list := range hosts {
+			for _, host := range strings.Split(list, ",") {
+				if !isLocalDatabaseHost(host) {
+					return errors.New("sslmode=disable is allowed only for local development hosts")
+				}
+			}
+		}
 		return nil
 	}
 	if mode != "verify-full" {
 		return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=disable is allowed only for local development hosts")
 	}
 	return nil
+}
+
+func isLocalDatabaseHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" || host == "postgres" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 func (s *Store) Close() error {

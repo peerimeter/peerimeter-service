@@ -11,6 +11,8 @@ func TestValidateTLSMode(t *testing.T) {
 		{name: "verified remote", url: "postgres://db.example:5432/peerimeter?sslmode=verify-full"},
 		{name: "local compose", url: "postgres://postgres:5432/peerimeter?sslmode=disable"},
 		{name: "local loopback", url: "postgres://localhost/peerimeter?sslmode=disable"},
+		{name: "remote host override", url: "postgres://postgres/peerimeter?host=remote.example&sslmode=disable", want: true},
+		{name: "mixed fallback hosts", url: "postgres://localhost/peerimeter?host=localhost,remote.example&sslmode=disable", want: true},
 		{name: "unverified remote", url: "postgres://db.example/peerimeter?sslmode=require", want: true},
 		{name: "remote default", url: "postgres://db.example/peerimeter", want: true},
 		{name: "malformed", url: "not a URL", want: true},
