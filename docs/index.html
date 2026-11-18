@@ -12,7 +12,7 @@
 <body><div class="wrap">
 <header><a href="https://peerimeter.app/" aria-label="Peerimeter home"><img src="https://raw.githubusercontent.com/peerimeter/.github/main/assets/peerimeter-logo.png" alt="Peerimeter"></a><nav aria-label="Main navigation"><a href="#source-setup">From source</a><a href="#docker">Docker</a><a href="https://github.com/peerimeter/peerimeter-service">Source</a></nav></header>
 <main>
-<section class="hero"><div class="eyebrow">Peerimeter control plane</div><h1>Host the API.<br><span>Keep control of your config.</span></h1><p class="lead">Peerimeter Service is a small Go HTTP API for storing and exchanging network and node configuration with Peerimeter agents. Run it from source for a quick start, or deploy the multi-architecture container with Docker Compose.</p><div class="buttons"><a class="button primary" href="#docker">Docker setup</a><a class="button" href="#source-setup">Run from source</a><a class="button" href="https://github.com/peerimeter/peerimeter-service">View source</a></div></section>
+<section class="hero"><div class="eyebrow">Peerimeter control plane</div><h1>Host the API.<br><span>Keep control of your config.</span></h1><p class="lead">Peerimeter Service is a small Go HTTP API for storing and exchanging network and node configuration with Peerimeter agents. Run it from source for a quick start, or deploy the multi-architecture API and PostgreSQL containers with Docker Compose.</p><div class="buttons"><a class="button primary" href="#docker">Docker setup</a><a class="button" href="#source-setup">Run from source</a><a class="button" href="https://github.com/peerimeter/peerimeter-service">View source</a></div></section>
 <aside class="notice"><strong>Before exposing the API:</strong> use a unique high-entropy API key and terminate HTTPS at a trusted reverse proxy. The current API uses one shared static key for all networks and nodes; it has no per-agent permissions or user accounts. Choose the file backend for a single-process install or PostgreSQL for durable database storage. For a dashboard hosted on another origin, set <code>PEERIMETER_CORS_ALLOWED_ORIGINS</code> to its exact HTTPS origin; wildcard origins are not accepted.</aside>
 <p class="muted">Join-bundle URLs require HTTPS by default. <code>PEERIMETER_REQUIRE_HTTPS=false</code> disables this validation and is intended only for local development or a trusted private environment.</p>
 <section id="source-setup" class="section"><h2>Simple setup: run from source</h2><p class="muted">This starts the service in the foreground on the local machine. It is useful for a small single-host installation or for trying the API.</p>
@@ -43,7 +43,7 @@ else
   echo "Service did not become ready; see service.log" &gt;&amp;2
   cat service.log
 fi</pre>
-<div class="callout">The example starts the service in the background so the same shell retains the API key for the local checks. Keep the key available to the service across restarts and provide the same key to agents through their join bundle. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
+<div class="callout">The example starts the service in the background so the same shell retains the API key for the local checks. Keep the service key available across restarts; the service derives a network-scoped join token from it. For a persistent deployment, store these values in your service manager’s protected environment file. Keep the default listen address on loopback when a local HTTPS reverse proxy forwards to the service.</div>
 <h3>Create a network</h3><p class="muted">Create the managed network and assign its private IPv4 WireGuard CIDR through the API. The CIDR must be canonical and between /8 and /30.</p><pre>curl --fail -X POST -H "Authorization: Bearer $PEERIMETER_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"version":1,"id":"home","name":"Home","cidr":"10.90.0.0/24"}' \
@@ -51,20 +51,25 @@ fi</pre>
 <h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
   'https://service.example.com/api/v1/join-bundle?network_id=home'</pre>
-<p class="muted">Agents can use <code>config pull</code> and <code>config push</code> to exchange network and node config files. This is explicit, one-shot transfer; the service does not automatically reconcile agent runtime state.</p></section>
-<section id="docker" class="section"><h2>Docker Compose setup</h2><p class="muted">The published image targets Linux amd64 and arm64 and runs as the unprivileged <code>app</code> user (UID/GID 1000). Select a versioned image tag from the service’s <a href="https://github.com/peerimeter/peerimeter-service/releases">GitHub releases</a>.</p>
-<ol class="steps"><li>Create a deployment directory, persistent data directory, and environment file.</li></ol>
+<p class="muted">Managed agents use <code>join</code> to enroll and <code>sync</code> to refresh registration and reconcile peers. The older one-shot <code>config pull/push</code> commands are no longer available. See the <a href="https://github.com/peerimeter/peerimeter-agent#readme">agent README</a>.</p></section>
+<section id="docker" class="section"><h2>Docker Compose setup</h2><p class="muted">The published service image targets Linux amd64 and arm64 and runs as the unprivileged <code>app</code> user (UID/GID 1000). Compose pairs it with the official PostgreSQL 18 Alpine image. Select a versioned service image tag from the service’s <a href="https://github.com/peerimeter/peerimeter-service/releases">GitHub releases</a>.</p>
+<ol class="steps"><li>Create a deployment directory, persistent PostgreSQL volume, and environment file.</li></ol>
 <pre>mkdir -p peerimeter-service/data
 cd peerimeter-service
-sudo install -d -o 1000 -g 1000 data
 umask 077
-cat &gt; .env &lt;&lt;'EOF'
+POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+PEERIMETER_API_KEY="$(openssl rand -hex 32)"
+cat &gt; .env &lt;&lt;EOF
 SERVICE_IMAGE_TAG=replace-with-a-release-tag
-PEERIMETER_API_KEY=replace-with-a-unique-random-secret
 PEERIMETER_PUBLIC_API_URL=https://service.example.com
+POSTGRES_USER=peerimeter
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_DB=peerimeter
+PEERIMETER_API_KEY=$PEERIMETER_API_KEY
 EOF
+unset POSTGRES_PASSWORD PEERIMETER_API_KEY
 chmod 600 .env</pre>
-<p>Generate a key with <code>openssl rand -hex 32</code> and replace the example value. Choose an image tag published for a service release. The ownership command assumes rootful Docker. With rootless Docker, assign the data directory to the host IDs mapped to container UID/GID 1000: add 999 to the first subordinate UID in <code>/etc/subuid</code> and the first subordinate GID in <code>/etc/subgid</code> for your user. With Docker’s <code>userns-remap</code>, add 1000 to the first subordinate UID and GID values configured for the remapped user.</p>
+<p>Choose a service image tag published for a release. The API key and database password are generated independently; keep <code>.env</code> private. To use the file backend, set <code>PEERIMETER_STORAGE_BACKEND=file</code> there.</p>
 <ol class="steps" start="2"><li>Save this as <code>compose.yaml</code> alongside the environment file.</li></ol>
 <pre>services:
   peerimeter-service:
@@ -72,27 +77,48 @@ chmod 600 .env</pre>
     restart: unless-stopped
     env_file: .env
     environment:
-      PEERIMETER_STORAGE_BACKEND: ${PEERIMETER_STORAGE_BACKEND:-file}
-      PEERIMETER_DATABASE_URL: ${PEERIMETER_DATABASE_URL:-}
+      PEERIMETER_STORAGE_BACKEND: ${PEERIMETER_STORAGE_BACKEND:-postgres}
+      PEERIMETER_DATABASE_URL: ${PEERIMETER_DATABASE_URL:-postgres://${POSTGRES_USER:-peerimeter}:${POSTGRES_PASSWORD:-peerimeter}@postgres:5432/${POSTGRES_DB:-peerimeter}?sslmode=disable}
       PEERIMETER_IMPORT_FILE: ${PEERIMETER_IMPORT_FILE:-}
       PEERIMETER_DATA_FILE: /var/lib/peerimeter/config.json
       PEERIMETER_LISTEN_ADDR: 0.0.0.0
       PORT: "8080"
     ports:
       - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data:/var/lib/peerimeter
     read_only: true
     cap_drop:
       - ALL
     security_opt:
-      - no-new-privileges:true</pre>
+      - no-new-privileges:true
+  postgres:
+    image: postgres:18.7-alpine3.24@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-peerimeter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-peerimeter}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:</pre>
 <ol class="steps" start="3"><li>Pull and start the service. Configure your HTTPS reverse proxy to forward to <code>127.0.0.1:8080</code>.</li></ol>
 <pre>docker compose pull
 docker compose up -d
 docker compose logs -f peerimeter-service</pre>
-<div class="grid"><div class="mini"><strong>Persistent data</strong><span class="muted">The file backend stores <code>config.json</code> with adjacent <code>nodes/</code> and <code>registrations/</code> folders. PostgreSQL stores network, node, and registration documents in JSONB; back up the database with your database provider’s backup tooling.</span></div><div class="mini"><strong>Network exposure</strong><span class="muted">The published port is bound to host loopback. Do not expose the service directly to the internet without HTTPS and an access boundary you trust.</span></div></div></section>
-<section class="section"><h2>What the current service provides</h2><div class="grid"><div class="mini"><strong>HTTP API</strong><span class="muted">Create networks with a WireGuard CIDR, register nodes, allocate tunnel addresses, and exchange versioned configuration documents.</span></div><div class="mini"><strong>Database option</strong><span class="muted">Select PostgreSQL with <code>PEERIMETER_STORAGE_BACKEND=postgres</code>. Embedded Goose migrations run at startup. Existing file stores can be imported once into an empty database.</span></div><div class="mini"><strong>Shared credential</strong><span class="muted">The join bundle carries the API URL and the service-wide static API key.</span></div><div class="mini"><strong>Direct connections</strong><span class="muted">The agent can report its primary underlay, probe STUN and reconcile peer endpoints. UDP hole punching is best-effort; this service has no relay fallback or guarantee across restrictive NATs.</span></div></div><p>Read the <a href="https://github.com/peerimeter/peerimeter-service/blob/main/README.md">service README</a> for the API contract, or visit the <a href="https://peerimeter.app/">Peerimeter project site</a>.</p></section>
+<div class="grid"><div class="mini"><strong>Persistent data</strong><span class="muted">Compose uses a named PostgreSQL volume for configuration and registrations. Back up PostgreSQL with <code>pg_dump</code>. The selectable file backend stores <code>config.json</code> with adjacent <code>nodes/</code> and <code>registrations/</code> folders.</span></div><div class="mini"><strong>Network exposure</strong><span class="muted">The published API port is bound to host loopback. PostgreSQL has no published host port. Do not expose the service directly to the internet without HTTPS and an access boundary you trust.</span></div></div></section>
+<section class="section"><h2>What the current service provides</h2><div class="grid"><div class="mini"><strong>HTTP API</strong><span class="muted">Create networks with a WireGuard CIDR, register nodes, allocate tunnel addresses, and exchange versioned configuration documents.</span></div><div class="mini"><strong>PostgreSQL datastore</strong><span class="muted">Compose uses PostgreSQL by default. Goose SQL migrations run at startup; existing file stores can be imported once into an empty database. Set <code>PEERIMETER_STORAGE_BACKEND=file</code> to use the legacy file backend.</span></div><div class="mini"><strong>Network-scoped join token</strong><span class="muted">The join bundle carries the API URL and a token derived from the service key and scoped to one network.</span></div><div class="mini"><strong>Direct connections</strong><span class="muted">The agent can report its primary underlay, probe STUN and reconcile peer endpoints. UDP hole punching is best-effort; this service has no relay fallback or guarantee across restrictive NATs.</span></div></div><p>Read the <a href="https://github.com/peerimeter/peerimeter-service/blob/main/README.md">service README</a> for the API contract, or visit the <a href="https://peerimeter.app/">Peerimeter project site</a>.</p></section>
 </main>
 <footer>Peerimeter Service is open source. <a href="https://github.com/peerimeter/peerimeter-service">Service source</a> · <a href="https://github.com/peerimeter/peerimeter-agent">Agent source</a> · <a href="https://peerimeter.app/">Project home</a></footer>
 </div></body></html>
