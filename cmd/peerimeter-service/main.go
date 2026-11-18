@@ -142,6 +142,13 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("import index file cannot be accessed")
 	}
+	if sidecarOnly {
+		for _, segment := range strings.Split(filepath.ToSlash(indexPath), "/") {
+			if segment == ".." {
+				return errors.New("sidecar-only import path cannot contain '..' components")
+			}
+		}
+	}
 	canonicalIndex := filepath.Join(filepath.Dir(indexPath), "config.json")
 	if sidecarOnly {
 		_, statErr := os.Lstat(canonicalIndex)
