@@ -26,3 +26,4 @@ ENV PEERIMETER_LISTEN_ADDR=0.0.0.0
 EXPOSE 8080
 VOLUME ["/var/lib/peerimeter"]
 ENTRYPOINT ["/peerimeter-service"]
+CMD ["serve"]

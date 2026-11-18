@@ -16,7 +16,7 @@ build:
 	$(GO) build ./...
 
 run:
-	$(GO) run ./cmd/peerimeter-service
+	$(GO) run ./cmd/peerimeter-service serve
 
 migrate:
 	$(GO) run ./cmd/peerimeter-service migrate

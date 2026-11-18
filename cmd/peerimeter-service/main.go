@@ -20,20 +20,8 @@ import (
 	"github.com/peerimeter/peerimeter-service/internal/postgresstore"
 )
 
-func main() {
+func runServer() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if len(os.Args) > 1 {
-		if len(os.Args) != 2 || os.Args[1] != "migrate" {
-			logger.Error("usage: peerimeter-service [migrate]")
-			os.Exit(2)
-		}
-		if err := migrateFromEnvironment(); err != nil {
-			logger.Error("run PostgreSQL migrations", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("PostgreSQL migrations are up to date")
-		return
-	}
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("load configuration", "error", err)
