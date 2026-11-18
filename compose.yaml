@@ -6,6 +6,7 @@ services:
     environment:
       PEERIMETER_STORAGE_BACKEND: ${PEERIMETER_STORAGE_BACKEND:-file}
       PEERIMETER_DATABASE_URL: ${PEERIMETER_DATABASE_URL:-postgres://${POSTGRES_USER:-peerimeter}:${POSTGRES_PASSWORD:-peerimeter-local-only}@postgres:5432/${POSTGRES_DB:-peerimeter}?sslmode=disable}
+      PEERIMETER_AUTO_MIGRATE: ${PEERIMETER_AUTO_MIGRATE:-true}
       PEERIMETER_IMPORT_FILE: ${PEERIMETER_IMPORT_FILE:-}
       PEERIMETER_DATA_FILE: /var/lib/peerimeter/config.json
       PEERIMETER_LISTEN_ADDR: 0.0.0.0

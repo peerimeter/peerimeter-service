@@ -22,6 +22,18 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) > 1 {
+		if len(os.Args) != 2 || os.Args[1] != "migrate" {
+			logger.Error("usage: peerimeter-service [migrate]")
+			os.Exit(2)
+		}
+		if err := migrateFromEnvironment(); err != nil {
+			logger.Error("run PostgreSQL migrations", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("PostgreSQL migrations are up to date")
+		return
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("load configuration", "error", err)
@@ -64,7 +76,14 @@ func main() {
 	}
 	var closeStore func()
 	if cfg.StorageBackend == "postgres" {
-		db, err := postgresstore.Open(cfg.DatabaseURL)
+		var db *postgresstore.Store
+		var err error
+		if cfg.AutoMigrate {
+			db, err = postgresstore.Open(cfg.DatabaseURL)
+		} else {
+			logger.Info("automatic PostgreSQL migrations are disabled")
+			db, err = postgresstore.OpenWithoutMigrations(cfg.DatabaseURL)
+		}
 		if err != nil {
 			logger.Error("open PostgreSQL store", "error", err)
 			os.Exit(1)
@@ -119,6 +138,17 @@ func main() {
 		logger.Error("shutdown HTTP server", "error", err)
 		os.Exit(1)
 	}
+}
+
+func migrateFromEnvironment() error {
+	if os.Getenv("PEERIMETER_STORAGE_BACKEND") != "postgres" {
+		return errors.New("PEERIMETER_STORAGE_BACKEND must be postgres for the migrate command")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_URL"))
+	if databaseURL == "" {
+		return errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
+	}
+	return postgresstore.Migrate(databaseURL)
 }
 
 func fileStoreMayContainData(indexPath string) bool {

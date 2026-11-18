@@ -26,6 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PEERIMETER_LISTEN_ADDR", "")
 	t.Setenv("PEERIMETER_PUBLIC_API_URL", "")
 	t.Setenv("PEERIMETER_REQUIRE_HTTPS", "")
+	t.Setenv("PEERIMETER_AUTO_MIGRATE", "")
 	t.Setenv("PEERIMETER_CORS_ALLOWED_ORIGINS", "")
 	t.Setenv("PORT", "")
 
@@ -33,8 +34,22 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.DataFile != "/var/lib/peerimeter/config.json" || cfg.ListenAddr != "127.0.0.1" || !cfg.RequireHTTPS || cfg.Port != "8080" {
+	if cfg.DataFile != "/var/lib/peerimeter/config.json" || cfg.ListenAddr != "127.0.0.1" || !cfg.RequireHTTPS || !cfg.AutoMigrate || cfg.Port != "8080" {
 		t.Fatalf("Load() defaults = %#v, unexpected values", cfg)
+	}
+}
+
+func TestLoadCanDisableAutomaticMigrations(t *testing.T) {
+	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
+	t.Setenv("PEERIMETER_STORAGE_BACKEND", "postgres")
+	t.Setenv("PEERIMETER_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("PEERIMETER_AUTO_MIGRATE", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoMigrate {
+		t.Fatal("AutoMigrate = true, want false")
 	}
 }
 
