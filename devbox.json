@@ -3,11 +3,11 @@
   "packages": ["postgresql@18.6"],
   "shell": {
     "init_hook": [
-      "export PGHOST=\"${TMPDIR:-/tmp}/peerimeter-pg\""
+      "export PGHOST=\"${TMPDIR:-/tmp}/peerimeter-pg-$(id -u)\"; mkdir -p \"$PGHOST\" && test -O \"$PGHOST\" && chmod 700 \"$PGHOST\" || { echo 'PostgreSQL socket directory must be owned by the current user' >&2; exit 1; }"
     ],
     "scripts": {
-      "postgres-init": "mkdir -p \"$PGDATA\" \"$PGHOST\" && initdb -D \"$PGDATA\"",
-      "postgres-up": "mkdir -p \"$PGHOST\" && pg_ctl -D \"$PGDATA\" -l \"$PGDATA/server.log\" -o \"-k $PGHOST\" start",
+      "postgres-init": "mkdir -p \"$PGDATA\" \"$PGHOST\" && test -O \"$PGHOST\" && chmod 700 \"$PGHOST\" && initdb -D \"$PGDATA\"",
+      "postgres-up": "mkdir -p \"$PGHOST\" && test -O \"$PGHOST\" && chmod 700 \"$PGHOST\" && pg_ctl -D \"$PGDATA\" -l \"$PGDATA/server.log\" -o \"-k \\\"$PGHOST\\\"\" start",
       "postgres-down": "pg_ctl -D \"$PGDATA\" stop -m fast",
       "postgres-create-test-db": "createdb peerimeter_test"
     }

@@ -144,7 +144,11 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 	}
 	canonicalIndex := filepath.Join(filepath.Dir(indexPath), "config.json")
 	if sidecarOnly && filepath.Clean(indexPath) != filepath.Clean(canonicalIndex) {
-		if info, statErr := os.Stat(canonicalIndex); statErr == nil && info.Mode().IsRegular() {
+		_, statErr := os.Lstat(canonicalIndex)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return errors.New("config.json cannot be accessed; resolve it before enabling sidecar-only import")
+		}
+		if statErr == nil {
 			return errors.New("config.json exists; check PEERIMETER_IMPORT_FILE instead of enabling sidecar-only import")
 		}
 	}
