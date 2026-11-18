@@ -51,6 +51,7 @@ can forward requests to `127.0.0.1:8080`.
    PEERIMETER_API_KEY="$(openssl rand -hex 32)"
    cat > .env <<EOF
    SERVICE_IMAGE_TAG=replace-with-a-release-tag
+   PEERIMETER_STORAGE_BACKEND=postgres
    PEERIMETER_PUBLIC_API_URL=https://service.example.com
    POSTGRES_USER=peerimeter
    POSTGRES_PASSWORD=$POSTGRES_PASSWORD
