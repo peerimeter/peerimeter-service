@@ -141,6 +141,34 @@ func TestSnapshotEmptyRecognizesNodeAndRegistrationDocuments(t *testing.T) {
 	}
 }
 
+func TestOpenLoadsSidecarsWithoutIndex(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "nodes", "mesh"), filepath.Join(root, "registrations", "mesh")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "nodes", "mesh", "node-a.yaml"), []byte("version: 1\nname: legacy-node\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "registrations", "mesh", "node-a.yaml"), []byte("public_key: legacy-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(filepath.Join(root, "config.json"), 2)
+	if err != nil {
+		t.Fatalf("open sidecar-only store: %v", err)
+	}
+	defer store.Close()
+	snapshot := store.Snapshot()
+	if snapshot.Empty() {
+		t.Fatal("sidecar-only snapshot reported empty")
+	}
+	network := snapshot.Networks["mesh"]
+	if len(network.Nodes["node-a"]) == 0 || len(network.Registrations["node-a"]) == 0 {
+		t.Fatalf("sidecars not loaded: %#v", network)
+	}
+}
+
 func TestStoreRejectsPathLikeIDs(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 1)
 	if err != nil {

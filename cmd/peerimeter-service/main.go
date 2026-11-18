@@ -34,9 +34,8 @@ func main() {
 		}
 	}
 	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
-		info, err := os.Stat(cfg.ImportFile)
-		if err != nil || !info.Mode().IsRegular() {
-			logger.Error("open file store for import", "error", "import index file must exist and be a regular file", "data_file", filepath.Base(cfg.ImportFile))
+		if err := validateImportIndex(cfg.ImportFile, cfg.ImportSidecarOnly); err != nil {
+			logger.Error("open file store for import", "error", err, "data_file", filepath.Base(cfg.ImportFile))
 			os.Exit(1)
 		}
 		legacy, err := configstore.Open(cfg.ImportFile, 128)
@@ -126,6 +125,30 @@ func fileStoreMayContainData(indexPath string) bool {
 	if info, err := os.Stat(indexPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		return true
 	}
+	return fileStoreHasSidecars(indexPath)
+}
+
+func validateImportIndex(indexPath string, sidecarOnly bool) error {
+	info, err := os.Stat(indexPath)
+	if err == nil {
+		if info.Mode().IsRegular() && !sidecarOnly {
+			return nil
+		}
+		if info.Mode().IsRegular() {
+			return errors.New("sidecar-only import mode requires a missing index file")
+		}
+		return errors.New("import index path must be a regular file")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("import index file cannot be accessed")
+	}
+	if sidecarOnly && fileStoreHasSidecars(indexPath) {
+		return nil
+	}
+	return errors.New("import index file is missing; set PEERIMETER_IMPORT_SIDECAR_ONLY=true only when importing node or registration sidecars without an index file")
+}
+
+func fileStoreHasSidecars(indexPath string) bool {
 	for _, name := range []string{"nodes", "registrations"} {
 		entries, err := os.ReadDir(filepath.Join(filepath.Dir(indexPath), name))
 		if err == nil && len(entries) > 0 {
