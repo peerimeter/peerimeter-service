@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      PEERIMETER_STORAGE_BACKEND: ${PEERIMETER_STORAGE_BACKEND:-file}
+      PEERIMETER_DATABASE_URL: ${PEERIMETER_DATABASE_URL:-}
+      PEERIMETER_IMPORT_FILE: ${PEERIMETER_IMPORT_FILE:-}
       PEERIMETER_DATA_FILE: /var/lib/peerimeter/config.json
       PEERIMETER_LISTEN_ADDR: 0.0.0.0
       PORT: "8080"

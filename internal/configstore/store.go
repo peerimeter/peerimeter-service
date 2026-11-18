@@ -51,6 +51,18 @@ type network struct {
 	Registrations map[string]json.RawMessage `json:"registrations,omitempty"`
 }
 
+// Snapshot is a deep copy of every document persisted by the file backend.
+type Snapshot struct {
+	Networks map[string]SnapshotNetwork
+}
+
+type SnapshotNetwork struct {
+	Config        json.RawMessage
+	Metadata      json.RawMessage
+	Nodes         map[string]json.RawMessage
+	Registrations map[string]json.RawMessage
+}
+
 type write struct {
 	kind      operationKind
 	networkID string
@@ -293,7 +305,7 @@ func (s *Store) ListRegisteredNodes(networkID string) (map[string]json.RawMessag
 	return result, nil
 }
 
-func (s *Store) ListNetworks() map[string]json.RawMessage {
+func (s *Store) ListNetworks() (map[string]json.RawMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make(map[string]json.RawMessage, len(s.state.Networks))
@@ -301,6 +313,18 @@ func (s *Store) ListNetworks() map[string]json.RawMessage {
 		if len(network.Metadata) != 0 {
 			result[id] = append(json.RawMessage(nil), network.Metadata...)
 		}
+	}
+	return result, nil
+}
+
+// Snapshot returns all file-backed network, node, and registration documents.
+func (s *Store) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := Snapshot{Networks: make(map[string]SnapshotNetwork, len(s.state.Networks))}
+	for id, value := range s.state.Networks {
+		copy := cloneNetwork(value)
+		result.Networks[id] = SnapshotNetwork{Config: copy.Config, Metadata: copy.Metadata, Nodes: copy.Nodes, Registrations: copy.Registrations}
 	}
 	return result
 }

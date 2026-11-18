@@ -12,6 +12,9 @@ import (
 // Config contains the service settings loaded from environment variables.
 type Config struct {
 	APIKey             string `env:"PEERIMETER_API_KEY,required"`
+	StorageBackend     string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
+	DatabaseURL        string `env:"PEERIMETER_DATABASE_URL"`
+	ImportFile         string `env:"PEERIMETER_IMPORT_FILE"`
 	DataFile           string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
 	ListenAddr         string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
 	PublicAPIURL       string `env:"PEERIMETER_PUBLIC_API_URL"`
@@ -28,6 +31,12 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return Config{}, fmt.Errorf("PEERIMETER_API_KEY must be set")
+	}
+	if cfg.StorageBackend != "file" && cfg.StorageBackend != "postgres" {
+		return Config{}, fmt.Errorf("PEERIMETER_STORAGE_BACKEND must be file or postgres")
+	}
+	if cfg.StorageBackend == "postgres" && strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_URL must be set when PEERIMETER_STORAGE_BACKEND=postgres")
 	}
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		origin := strings.TrimSpace(raw)

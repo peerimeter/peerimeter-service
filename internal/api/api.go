@@ -30,7 +30,7 @@ type configStore interface {
 	GetNetworkMetadata(string) (json.RawMessage, error)
 	GetNode(string, string) (json.RawMessage, error)
 	ListRegisteredNodes(string) (map[string]json.RawMessage, error)
-	ListNetworks() map[string]json.RawMessage
+	ListNetworks() (map[string]json.RawMessage, error)
 	CreateNetwork(ctx context.Context, id string, value json.RawMessage) error
 	RegisterNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) (json.RawMessage, error)
 	PutNetwork(ctx context.Context, id string, value json.RawMessage) error
@@ -46,7 +46,7 @@ type API struct {
 	allowedOrigins map[string]bool
 }
 
-func New(key, publicURL string, store *configstore.Store, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
+func New(key, publicURL string, store configStore, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
 	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool)}
 	for _, raw := range corsAllowedOrigins {
 		if origin, err := normalizeOrigin(raw); err == nil {
@@ -223,11 +223,17 @@ type networkRequest struct {
 	CIDR    string `json:"cidr"`
 }
 
-func (a *API) listNetworks(w http.ResponseWriter, _ *http.Request) {
+func (a *API) listNetworks(w http.ResponseWriter, r *http.Request) {
+	networks, err := a.store.ListNetworks()
+	if err != nil {
+		a.logger.ErrorContext(r.Context(), "list networks", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not list networks")
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		Version  int                        `json:"version"`
 		Networks map[string]json.RawMessage `json:"networks"`
-	}{Version: 1, Networks: a.store.ListNetworks()})
+	}{Version: 1, Networks: networks})
 }
 
 func (a *API) getNetworkMetadata(w http.ResponseWriter, r *http.Request) {

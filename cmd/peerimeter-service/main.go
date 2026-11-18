@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"github.com/peerimeter/peerimeter-service/internal/api"
 	"github.com/peerimeter/peerimeter-service/internal/config"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
+	"github.com/peerimeter/peerimeter-service/internal/postgresstore"
 )
 
 func main() {
@@ -25,12 +27,52 @@ func main() {
 		os.Exit(2)
 	}
 
-	store, err := configstore.Open(cfg.DataFile, 128)
-	if err != nil {
-		logger.Error("open configuration store", "error", err)
-		os.Exit(1)
+	var store interface {
+		GetNetwork(string) (json.RawMessage, error)
+		GetNetworkMetadata(string) (json.RawMessage, error)
+		GetNode(string, string) (json.RawMessage, error)
+		ListRegisteredNodes(string) (map[string]json.RawMessage, error)
+		ListNetworks() (map[string]json.RawMessage, error)
+		CreateNetwork(context.Context, string, json.RawMessage) error
+		RegisterNode(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
+		PutNetwork(context.Context, string, json.RawMessage) error
+		PutNode(context.Context, string, string, json.RawMessage) error
 	}
-	defer store.Close()
+	var closeStore func()
+	if cfg.StorageBackend == "postgres" {
+		db, err := postgresstore.Open(cfg.DatabaseURL)
+		if err != nil {
+			logger.Error("open PostgreSQL store", "error", err)
+			os.Exit(1)
+		}
+		if cfg.ImportFile != "" {
+			legacy, err := configstore.Open(cfg.ImportFile, 128)
+			if err != nil {
+				logger.Error("open file store for import", "error", err)
+				_ = db.Close()
+				os.Exit(1)
+			}
+			err = db.ImportSnapshot(context.Background(), legacy.Snapshot())
+			legacy.Close()
+			if err != nil {
+				logger.Error("import file store into PostgreSQL", "error", err)
+				_ = db.Close()
+				os.Exit(1)
+			}
+			logger.Info("imported file store into empty PostgreSQL database", "data_file", cfg.ImportFile)
+		}
+		store = db
+		closeStore = func() { _ = db.Close() }
+	} else {
+		fileStore, err := configstore.Open(cfg.DataFile, 128)
+		if err != nil {
+			logger.Error("open configuration store", "error", err)
+			os.Exit(1)
+		}
+		store = fileStore
+		closeStore = fileStore.Close
+	}
+	defer closeStore()
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenAddr, cfg.Port),
