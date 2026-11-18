@@ -142,6 +142,12 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("import index file cannot be accessed")
 	}
+	canonicalIndex := filepath.Join(filepath.Dir(indexPath), "config.json")
+	if sidecarOnly && filepath.Clean(indexPath) != filepath.Clean(canonicalIndex) {
+		if info, statErr := os.Stat(canonicalIndex); statErr == nil && info.Mode().IsRegular() {
+			return errors.New("config.json exists; check PEERIMETER_IMPORT_FILE instead of enabling sidecar-only import")
+		}
+	}
 	if sidecarOnly && fileStoreHasSidecars(indexPath) {
 		return nil
 	}
@@ -149,8 +155,12 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 }
 
 func fileStoreHasSidecars(indexPath string) bool {
-	for _, name := range []string{"nodes", "registrations"} {
-		entries, err := os.ReadDir(filepath.Join(filepath.Dir(indexPath), name))
+	for _, path := range []string{
+		filepath.Join(filepath.Dir(indexPath), "nodes"),
+		filepath.Join(filepath.Dir(indexPath), "registrations"),
+		indexPath + ".registrations",
+	} {
+		entries, err := os.ReadDir(path)
 		if err == nil && len(entries) > 0 {
 			return true
 		}

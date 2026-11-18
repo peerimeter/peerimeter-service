@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -143,6 +144,9 @@ type pgEndpoint struct {
 }
 
 func isLocalDatabaseHost(host string) bool {
+	if filepath.IsAbs(host) {
+		return true
+	}
 	host = strings.ToLower(strings.TrimSpace(host))
 	if hostPort := net.ParseIP(host); hostPort != nil {
 		return hostPort.IsLoopback()

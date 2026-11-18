@@ -59,4 +59,29 @@ func TestValidateImportIndexAllowsExplicitSidecarOnlySource(t *testing.T) {
 	if err := validateImportIndex(index, true); err != nil {
 		t.Fatalf("explicit sidecar-only source rejected: %v", err)
 	}
+	if err := os.RemoveAll(filepath.Join(root, "nodes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(index+".registrations/mesh", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(index+".registrations/mesh", "node-a.yaml"), []byte("public_key: key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(index, true); err != nil {
+		t.Fatalf("legacy registration sidecars rejected: %v", err)
+	}
+}
+
+func TestValidateImportIndexRejectsMissingAlternateWhenCanonicalIndexExists(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "nodes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(filepath.Join(root, "confg.json"), true); err == nil {
+		t.Fatal("sidecar-only import accepted a missing alternate path despite config.json")
+	}
 }

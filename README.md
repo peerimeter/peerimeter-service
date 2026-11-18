@@ -99,22 +99,44 @@ fi
 `mktemp` creates a unique owner-only file in the destination directory. The
 command above backs up the database named by `POSTGRES_DB` in the bundled
 container. Use it only when `PEERIMETER_DATABASE_URL` is unset or points to
-that same database. For a remote URL or any other database, install the PostgreSQL client, load
-the quoted `.env` values into the current shell, and dump the URL itself to a
-unique temporary file before replacing the previous backup:
+that same database. For a remote URL or any other database, install the
+PostgreSQL client and dump the URL itself to a unique temporary file before
+replacing the previous backup. This subshell loads `.env` only as a fallback,
+preserves a URL already set in the shell, and keeps import-related settings
+out of the deployment shell:
 
 ```sh
-set -a
-. ./.env
-set +a
-backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
-if pg_dump "$PEERIMETER_DATABASE_URL" > "$backup_tmp"; then
-  mv "$backup_tmp" peerimeter.sql
-else
-  rm -f "$backup_tmp"
-  exit 1
-fi
+(
+  backup_url=${PEERIMETER_DATABASE_URL:-}
+  if [ -f .env ]; then
+    set -a
+    . ./.env
+    set +a
+  fi
+  if [ -n "$backup_url" ]; then
+    PEERIMETER_DATABASE_URL=$backup_url
+  fi
+  if [ -z "${PEERIMETER_DATABASE_URL:-}" ]; then
+    echo "Set PEERIMETER_DATABASE_URL or add it to .env" >&2
+    exit 1
+  fi
+  backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
+  if pg_dump "$PEERIMETER_DATABASE_URL" > "$backup_tmp"; then
+    mv "$backup_tmp" peerimeter.sql
+  else
+    rm -f "$backup_tmp"
+    exit 1
+  fi
+)
 ```
+
+For a private CA, `sslrootcert` in a host-side backup URL must point to a
+certificate path readable by the host `pg_dump`; a path mounted only inside
+the service container (such as `/run/peerimeter/private-ca.pem`) is not
+available on the host. Keep `sslmode=verify-full`. If you previously sourced
+`.env` into the deployment shell using the older snippet, run
+`unset PEERIMETER_IMPORT_FILE PEERIMETER_IMPORT_SIDECAR_ONLY` before recreating
+the service container after the import is complete.
 
 If you choose the file backend, back up the whole `data/` directory. It
 contains `config.json` and adjacent `nodes/` and `registrations/` directories.
@@ -147,10 +169,12 @@ Append `&sslrootcert=%2Frun%2Fpeerimeter%2Fprivate-ca.pem` to
 `PEERIMETER_DATABASE_URL` (or use `?sslrootcert=...` if it has no query string).
 
 To import an existing file store, stop its writer and copy `config.json`, if
-present, plus the sibling `nodes/` and `registrations/` directories into the
-Compose `data/` mount. For the source setup in the hosted guide, the default is
+present, plus the sibling `nodes/` and `registrations/` directories and the
+legacy `config.json.registrations/` directory when present into the Compose
+`data/` mount. For the source setup in the hosted guide, the default is
 `$HOME/.local/share/peerimeter`; copy that directory’s contents, including
-`config.json`, `nodes/`, and `registrations/` when present. If the store is
+`config.json`, `nodes/`, `registrations/`, and `config.json.registrations/`
+when present. If the store is
 already in `data/`, skip the copy. Make the copied files readable by container
 UID/GID `1000:1000` (or the mapped host IDs for rootless/remapped Docker). Then
 set `PEERIMETER_IMPORT_FILE` to its
@@ -263,6 +287,27 @@ direnv allow             # once per checkout
 make test
 make run
 ```
+
+The `.envrc` loads the pinned Devbox environment and then loads `.env` when it
+exists. Devbox provides PostgreSQL `18.6` for local development. Initialize and
+start its database once, then create the integration-test database:
+
+```sh
+devbox run postgres-init
+devbox run postgres-up
+```
+
+In another shell inside the project, create the test database once and run the
+integration suite over the local PostgreSQL socket:
+
+```sh
+devbox run postgres-create-test-db
+PEERIMETER_TEST_DATABASE_URL="postgresql://$(id -un)@/peerimeter_test?host=$PGHOST&sslmode=disable" make test-integration
+```
+
+Stop PostgreSQL with `devbox run postgres-down`. Its data stays in the ignored
+`.devbox/virtenv/postgresql/data` directory. The socket uses a short path under
+`$TMPDIR` for compatibility with Unix socket path limits.
 
 The local `.env.example` values are for development only. `.env` is ignored by
 Git. `make run` binds to `127.0.0.1` by default; the container overrides this
