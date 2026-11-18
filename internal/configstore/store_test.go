@@ -90,6 +90,36 @@ func TestGetMissingConfig(t *testing.T) {
 	}
 }
 
+func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateNetwork(ctx, "mesh", json.RawMessage(`{"id":"mesh","name":"Mesh","cidr":"10.90.0.0/24"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNetwork(ctx, "mesh", json.RawMessage(`{"version":1,"name":"config"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNode(ctx, "mesh", "node-a", json.RawMessage(`{"version":1,"name":"node"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RegisterNode(ctx, "mesh", "node-a", json.RawMessage(`{"public_key":"public-key"}`)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	network := snapshot.Networks["mesh"]
+	if len(network.Metadata) == 0 || len(network.Config) == 0 || len(network.Nodes["node-a"]) == 0 || len(network.Registrations["node-a"]) == 0 {
+		t.Fatalf("incomplete snapshot: %#v", network)
+	}
+	network.Config[0] = 'x'
+	if _, err := store.GetNetwork("mesh"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStoreRejectsPathLikeIDs(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 1)
 	if err != nil {

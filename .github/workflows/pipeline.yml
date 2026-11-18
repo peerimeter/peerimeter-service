@@ -16,6 +16,22 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
+        env:
+          POSTGRES_USER: peerimeter
+          POSTGRES_PASSWORD: peerimeter-test-only
+          POSTGRES_DB: peerimeter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U peerimeter -d peerimeter_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PEERIMETER_TEST_DATABASE_URL: postgres://peerimeter:peerimeter-test-only@localhost:5432/peerimeter_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7.0.1
         with:

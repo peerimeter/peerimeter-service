@@ -69,3 +69,25 @@ func TestLoadRequiresAPIKey(t *testing.T) {
 		t.Fatal("Load() error = nil, want required API key error")
 	}
 }
+
+func TestLoadStorageBackendSelection(t *testing.T) {
+	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
+	t.Setenv("PEERIMETER_STORAGE_BACKEND", "postgres")
+	t.Setenv("PEERIMETER_DATABASE_URL", "postgres://localhost/test")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StorageBackend != "postgres" || cfg.DatabaseURL != "postgres://localhost/test" {
+		t.Fatalf("storage config = %#v", cfg)
+	}
+	t.Setenv("PEERIMETER_STORAGE_BACKEND", "unknown")
+	if _, err := Load(); err == nil {
+		t.Fatal("unknown storage backend accepted")
+	}
+	t.Setenv("PEERIMETER_STORAGE_BACKEND", "postgres")
+	t.Setenv("PEERIMETER_DATABASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("PostgreSQL backend without database URL accepted")
+	}
+}

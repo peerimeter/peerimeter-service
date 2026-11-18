@@ -8,12 +8,14 @@ projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 
 ## Current status
 
-The service stores network metadata and configuration in a local JSON file,
-with node configuration and registrations in adjacent directories. Writes are
-serialized and replaced atomically within one process. Use one service instance
-and one data file per directory because node and registration directories are
-shared siblings. PostgreSQL, MQTT coordination, user accounts, and multi-instance
-locking are not included.
+The service supports two selectable persistence backends. The default `file`
+backend stores network metadata/configuration in JSON and node configuration
+and registrations in adjacent directories; it is intended for single-process
+development and small deployments. The `postgres` backend stores all four
+document types in PostgreSQL JSONB and applies versioned Goose SQL migrations
+on startup. PostgreSQL transactions protect network CIDR checks and concurrent
+address allocation. MQTT coordination, user accounts, and multi-instance API
+authorization are not included.
 
 ## Quick start with Docker Compose
 
@@ -65,6 +67,16 @@ can forward requests to `127.0.0.1:8080`.
 Back up the whole `data/` directory. It contains `config.json` and the adjacent
 `nodes/` and `registrations/` directories. These hold node
 documents and registration state.
+
+To use PostgreSQL, set `PEERIMETER_STORAGE_BACKEND=postgres` and
+`PEERIMETER_DATABASE_URL` in `.env` before starting Compose. The service runs
+embedded Goose migrations at startup. The file backend remains the default.
+To import an existing file store, set `PEERIMETER_IMPORT_FILE` to its
+`config.json` path on a one-time startup. Import copies the network metadata,
+network config, node configs, and registrations in one transaction, and refuses
+to run unless the PostgreSQL tables are empty. Keep the original files until
+you have verified the imported data and backed up the database. Remove
+`PEERIMETER_IMPORT_FILE` after a successful import.
 
 ## API
 
@@ -162,12 +174,22 @@ The local `.env.example` values are for development only. `.env` is ignored by
 Git. `make run` binds to `127.0.0.1` by default; the container overrides this
 with `0.0.0.0` inside its isolated network namespace.
 
+`make test` runs unit tests. PostgreSQL integration tests use a dedicated
+database because they apply migrations and write records:
+
+```sh
+PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=require' make test-integration
+```
+
 ## Configuration
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
-| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | Main data file; use one data file per directory because sibling `nodes/` and `registrations/` directories are shared. |
+| `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`. |
+| `PEERIMETER_DATABASE_URL` | Empty | PostgreSQL connection URL; required when the backend is `postgres`. Use TLS for remote databases. |
+| `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source `config.json`; import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
+| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |
 | `PEERIMETER_LISTEN_ADDR` | `127.0.0.1` | Bind address. Set to `0.0.0.0` in a container. |
 | `PORT` | `8080` | HTTP port. |
 | `PEERIMETER_PUBLIC_API_URL` | Empty | Public API URL included in join bundles; required for bundle creation. |
