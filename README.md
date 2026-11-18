@@ -185,17 +185,25 @@ For a private CA, the container URL uses the mounted path
 its mapped host user) must be able to read the CA file; `:ro` prevents writes
 but does not grant read access.
 
-For a host-side `pg_dump`, the certificate path must be readable on the host.
-Export a host-side URL before running the backup command; the command preserves
-an exported value instead of replacing it with the URL from `.env`:
+For a host-side `pg_dump`, use a certificate path readable on the host. Keep
+the container URL in `.env`; run the host URL and dump together in a subshell
+so it cannot affect later Compose commands:
 
 ```sh
-export PEERIMETER_DATABASE_URL='postgres://USER:PERCENT_ENCODED_PASSWORD@HOST:5432/DB?sslmode=verify-full&sslrootcert=%2Fabsolute%2Fpath%2Fprivate-ca.pem'
+(
+  export PEERIMETER_DATABASE_URL='postgres://USER:PERCENT_ENCODED_PASSWORD@HOST:5432/DB?sslmode=verify-full&sslrootcert=%2Fabsolute%2Fpath%2Fprivate-ca.pem'
+  backup_tmp="$(mktemp ./peerimeter.sql.XXXXXX)"
+  if pg_dump "$PEERIMETER_DATABASE_URL" > "$backup_tmp"; then
+    mv "$backup_tmp" peerimeter.sql
+  else
+    rm -f "$backup_tmp"
+    exit 1
+  fi
+)
 ```
 
-Use the mounted container path in `.env` for the service. The host-side URL is
-for the backup command only; its certificate path is not available in the
-container.
+Use the mounted container path in `.env` for the service. The host-side
+certificate path is not available inside the container.
 
 ### Import an existing file store
 
