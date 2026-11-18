@@ -10,7 +10,9 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
@@ -54,6 +56,9 @@ type registrationRow struct {
 func (registrationRow) TableName() string { return "registrations" }
 
 func Open(databaseURL string) (*Store, error) {
+	if err := validateTLSMode(databaseURL); err != nil {
+		return nil, err
+	}
 	dbLogger := gormlogger.New(log.New(io.Discard, "", 0), gormlogger.Config{
 		LogLevel:                  gormlogger.Silent,
 		IgnoreRecordNotFoundError: true,
@@ -91,6 +96,26 @@ func Open(databaseURL string) (*Store, error) {
 		return nil, fmt.Errorf("apply PostgreSQL migrations: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+func validateTLSMode(databaseURL string) error {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || parsed.Hostname() == "" {
+		return errors.New("PostgreSQL URL must include a valid host")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	local := host == "localhost" || host == "postgres"
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		local = true
+	}
+	mode := parsed.Query().Get("sslmode")
+	if local && mode == "disable" {
+		return nil
+	}
+	if mode != "verify-full" {
+		return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=disable is allowed only for local development hosts")
+	}
+	return nil
 }
 
 func (s *Store) Close() error {

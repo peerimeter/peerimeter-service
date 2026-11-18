@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,11 @@ func main() {
 	}
 	var importSnapshot configstore.Snapshot
 	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
+		info, err := os.Stat(cfg.ImportFile)
+		if err != nil || !info.Mode().IsRegular() {
+			logger.Error("open file store for import", "error", "import index file must exist and be a regular file", "data_file", filepath.Base(cfg.ImportFile))
+			os.Exit(1)
+		}
 		legacy, err := configstore.Open(cfg.ImportFile, 128)
 		if err != nil {
 			logger.Error("open file store for import", "error", err)
