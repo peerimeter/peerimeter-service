@@ -177,7 +177,7 @@ legacy `config.json.registrations/` directory when present into the Compose
 when present. If the store is
 already in `data/`, skip the copy. Make the copied files readable by container
 UID/GID `1000:1000` (or the mapped host IDs for rootless/remapped Docker). Then
-set `PEERIMETER_IMPORT_FILE` to its
+set `PEERIMETER_STORAGE_BACKEND=postgres` and `PEERIMETER_IMPORT_FILE` to its
 `config.json` path on a one-time startup. With the default Compose mount, use
 `/var/lib/peerimeter/config.json`; host relative paths are not visible in the
 container. Stop every file-backed service or process that can write to the

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,10 +79,21 @@ func TestValidateImportIndexRejectsMissingAlternateWhenCanonicalIndexExists(t *t
 	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte(`{"version":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, "nodes"), 0o700); err != nil {
+	nodes := filepath.Join(root, "nodes")
+	if err := os.Mkdir(nodes, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateImportIndex(filepath.Join(root, "confg.json"), true); err == nil {
-		t.Fatal("sidecar-only import accepted a missing alternate path despite config.json")
+	if err := os.WriteFile(filepath.Join(nodes, "node-a.yaml"), []byte("valid sidecar\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alternateIndex := filepath.Join(root, "confg.json")
+	if err := validateImportIndex(alternateIndex, true); err == nil || !strings.Contains(err.Error(), "config.json exists") {
+		t.Fatalf("sidecar-only import error = %v, want canonical config.json error", err)
+	}
+	if err := os.Remove(filepath.Join(root, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateImportIndex(alternateIndex, true); err != nil {
+		t.Fatalf("sidecar-only source without canonical index rejected: %v", err)
 	}
 }
