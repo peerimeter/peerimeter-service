@@ -114,11 +114,15 @@ this snippet. Replace the host path with the path to your CA file:
       - /absolute/path/private-ca.pem:/run/peerimeter/private-ca.pem:ro
 ```
 
-Add `sslrootcert=%2Frun%2Fpeerimeter%2Fprivate-ca.pem` to
-`PEERIMETER_DATABASE_URL`. Prefix it with `?` for the first URL parameter or
-`&` when the URL already has parameters. The container user (UID/GID
-`1000:1000`, or its mapped host user) must be able to read the CA file; `:ro`
-prevents writes but does not grant read access.
+Set the URL in `.env` to use the mounted container path. Quote the whole value
+so `&` stays inside the assignment:
+
+```text
+PEERIMETER_DATABASE_URL='postgres://USER:PERCENT_ENCODED_PASSWORD@HOST:5432/DB?sslmode=verify-full&sslrootcert=%2Frun%2Fpeerimeter%2Fprivate-ca.pem'
+```
+
+The container user (UID/GID `1000:1000`, or its mapped host user) must be able
+to read the CA file; `:ro` prevents writes but does not grant read access.
 
 ### Back up your data
 
