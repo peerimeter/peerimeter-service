@@ -14,6 +14,7 @@ type Config struct {
 	APIKey             string `env:"PEERIMETER_API_KEY,required"`
 	StorageBackend     string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
 	DatabaseURL        string `env:"PEERIMETER_DATABASE_URL"`
+	AutoMigrate        bool   `env:"PEERIMETER_AUTO_MIGRATE" envDefault:"true"`
 	ImportFile         string `env:"PEERIMETER_IMPORT_FILE"`
 	ImportSidecarOnly  bool   `env:"PEERIMETER_IMPORT_SIDECAR_ONLY"`
 	DataFile           string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`

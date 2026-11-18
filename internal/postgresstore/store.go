@@ -58,6 +58,48 @@ type registrationRow struct {
 func (registrationRow) TableName() string { return "registrations" }
 
 func Open(databaseURL string) (*Store, error) {
+	return open(databaseURL, true)
+}
+
+// OpenWithoutMigrations connects to PostgreSQL without applying schema changes.
+func OpenWithoutMigrations(databaseURL string) (*Store, error) {
+	return open(databaseURL, false)
+}
+
+// Migrate applies all pending embedded PostgreSQL migrations.
+func Migrate(databaseURL string) error {
+	store, err := open(databaseURL, false)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.migrate()
+}
+
+func (s *Store) migrate() error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return fmt.Errorf("get PostgreSQL connection pool: %w", err)
+	}
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("open embedded PostgreSQL migrations: %w", err)
+	}
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("configure PostgreSQL migration lock: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations, goose.WithSessionLocker(locker))
+	if err != nil {
+		return fmt.Errorf("configure PostgreSQL migrations: %w", err)
+	}
+	if _, err := provider.Up(context.Background()); err != nil {
+		return fmt.Errorf("apply PostgreSQL migrations: %w", err)
+	}
+	return nil
+}
+
+func open(databaseURL string, autoMigrate bool) (*Store, error) {
 	if err := validateTLSMode(databaseURL); err != nil {
 		return nil, err
 	}
@@ -78,26 +120,14 @@ func Open(databaseURL string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
-	migrations, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("open embedded PostgreSQL migrations: %w", err)
+	store := &Store{db: db}
+	if autoMigrate {
+		if err := store.migrate(); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
 	}
-	locker, err := lock.NewPostgresSessionLocker()
-	if err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("configure PostgreSQL migration lock: %w", err)
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations, goose.WithSessionLocker(locker))
-	if err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("configure PostgreSQL migrations: %w", err)
-	}
-	if _, err := provider.Up(context.Background()); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("apply PostgreSQL migrations: %w", err)
-	}
-	return &Store{db: db}, nil
+	return store, nil
 }
 
 func validateTLSMode(databaseURL string) error {

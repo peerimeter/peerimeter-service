@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: env test test-integration build run fmt
+.PHONY: env test test-integration build run migrate fmt
 
 env:
 	@test -f .env || cp .env.example .env
@@ -17,6 +17,9 @@ build:
 
 run:
 	$(GO) run ./cmd/peerimeter-service
+
+migrate:
+	$(GO) run ./cmd/peerimeter-service migrate
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './.git/*')

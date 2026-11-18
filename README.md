@@ -17,8 +17,10 @@ intended for local development and single-process deployments. The single
 `PEERIMETER_STORAGE_BACKEND=file` or `postgres` to select storage; set
 `PEERIMETER_DATABASE_URL` to use remote PostgreSQL or Supabase. PostgreSQL
 stores all four document types in JSONB and applies versioned Goose SQL
-migrations on startup. Transactions protect network CIDR checks and concurrent
-address allocation.
+migrations on startup by default. Set `PEERIMETER_AUTO_MIGRATE=false` to disable
+startup migrations, then run `peerimeter-service migrate` (or `make migrate` for
+local development) to apply them explicitly. Transactions protect network CIDR
+checks and concurrent address allocation.
 MQTT coordination, user accounts, and multi-instance API authorization are
 not included.
 
@@ -95,7 +97,10 @@ The bundled PostgreSQL container starts in every Compose mode and stores its
 data in a persistent `postgres-data` volume. It has no published host port.
 Its connection URL is built from `POSTGRES_*`; use URI-safe credentials such
 as the generated hexadecimal password, or percent-encode credentials in
-`PEERIMETER_DATABASE_URL`. Goose migrations run when the service starts.
+`PEERIMETER_DATABASE_URL`. Goose migrations run when the service starts unless
+`PEERIMETER_AUTO_MIGRATE=false` is set. To apply migrations manually in Compose,
+run `docker compose run --rm peerimeter-service migrate`; the command uses the
+database settings from `.env` and does not require the API key.
 
 ### Secure remote database connections
 
