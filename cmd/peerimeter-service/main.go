@@ -143,7 +143,7 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 		return errors.New("import index file cannot be accessed")
 	}
 	canonicalIndex := filepath.Join(filepath.Dir(indexPath), "config.json")
-	if sidecarOnly && filepath.Clean(indexPath) != filepath.Clean(canonicalIndex) {
+	if sidecarOnly {
 		_, statErr := os.Lstat(canonicalIndex)
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return errors.New("config.json cannot be accessed; resolve it before enabling sidecar-only import")
