@@ -11,10 +11,12 @@ projects. The hosted setup guide is at <https://service.peerimeter.app/>.
 The service supports two selectable persistence backends. The service's
 environment default is `file`, which stores network metadata/configuration in
 JSON and node configuration and registrations in adjacent directories. It is
-intended for local development and single-process deployments. Docker Compose
-defaults to `postgres`, which stores all four document types in PostgreSQL
-JSONB and applies versioned Goose SQL migrations on startup. PostgreSQL
-transactions protect network CIDR checks and concurrent address allocation.
+intended for local development and single-process deployments. The base Compose
+file uses the file backend; `compose.postgres.yaml` adds a PostgreSQL 18 Alpine
+database and selects the `postgres` backend. A separate overlay supports a
+remote PostgreSQL or Supabase database. PostgreSQL stores all four document
+types in JSONB and applies versioned Goose SQL migrations on startup.
+Transactions protect network CIDR checks and concurrent address allocation.
 MQTT coordination, user accounts, and multi-instance API authorization are
 not included.
 
@@ -59,41 +61,53 @@ can forward requests to `127.0.0.1:8080`.
    [GitHub Releases](https://github.com/peerimeter/peerimeter-service/releases).
    Keep `.env` private and out of version control.
 
-3. Start the service and PostgreSQL database:
+3. Start the service and bundled PostgreSQL database:
 
    ```sh
-   docker compose pull
-   docker compose up -d
-   docker compose logs -f peerimeter-service
+   docker compose -f compose.yaml -f compose.postgres.yaml pull
+   docker compose -f compose.yaml -f compose.postgres.yaml up -d
+   docker compose -f compose.yaml -f compose.postgres.yaml logs -f peerimeter-service
    ```
 
    Configure the reverse proxy to use `http://127.0.0.1:8080` as its upstream
    and terminate HTTPS there. `PEERIMETER_PUBLIC_API_URL` must be the public
    HTTPS URL agents will use.
 
-Compose uses the PostgreSQL backend and a persistent `postgres-data` volume by
-default. Back up the database with:
+The PostgreSQL overlay stores data in a persistent `postgres-data` volume.
+Back up the database without replacing a previous backup if the dump fails:
 
 ```sh
-docker compose exec -T postgres pg_dump -U peerimeter peerimeter > peerimeter.sql
+docker compose -f compose.yaml -f compose.postgres.yaml exec -T postgres \
+  sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > peerimeter.sql.tmp \
+  && mv peerimeter.sql.tmp peerimeter.sql
 ```
 
 If you choose the file backend, back up the whole `data/` directory. It
 contains `config.json` and adjacent `nodes/` and `registrations/` directories.
 
-To use the file backend in Compose, set `PEERIMETER_STORAGE_BACKEND=file` in
-`.env`; the application will then use `PEERIMETER_DATA_FILE`. For a remote
-PostgreSQL or Supabase database, set `PEERIMETER_STORAGE_BACKEND=postgres` and
-provide `PEERIMETER_DATABASE_URL` with `sslmode=verify-full`. Remote connections
-without certificate and hostname verification are rejected. `sslmode=disable`
-is accepted only for local development hosts (`localhost`, loopback addresses,
-or the Compose `postgres` service). The service runs embedded Goose migrations
-at startup.
+For file storage, run `docker compose -f compose.yaml up -d`. For a remote
+PostgreSQL or Supabase database, set `PEERIMETER_DATABASE_URL` in `.env` with
+`sslmode=verify-full` and run:
+
+```sh
+docker compose -f compose.yaml -f compose.remote-postgres.yaml up -d
+```
+
+Remote connections without certificate and hostname verification are rejected.
+`sslmode=disable` is accepted only for local development hosts (`localhost`,
+loopback addresses, or the bundled Compose `postgres` service). The bundled
+database URL is built from `POSTGRES_*`; use URI-safe credentials such as the
+generated hexadecimal password, or provide `PEERIMETER_DATABASE_URL` with
+percent-encoded credentials.
+The service runs embedded Goose migrations at startup.
 To import an existing file store, set `PEERIMETER_IMPORT_FILE` to its
-`config.json` path on a one-time startup. Stop every file-backed service or
-process that can write to the store before starting the import; the importer
-reads a snapshot and does not coordinate with file-backed writers. The index
-file must exist and be a regular file. Import copies the network metadata,
+`config.json` path on a one-time startup. With the default Compose mount, use
+`/var/lib/peerimeter/config.json`; host relative paths are not visible in the
+container. Stop every file-backed service or process that can write to the
+store before starting the import; the importer reads a snapshot and does not
+coordinate with file-backed writers. The index file must exist and be a
+regular file. Startup warns if a file store is present but no import path is
+configured. Import copies the network metadata,
 network config, node configs, and registrations in one transaction, and refuses
 to run unless the PostgreSQL tables are empty. Keep the original files until
 you have verified the imported data and backed up the database. Remove
@@ -207,7 +221,7 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
-| `PEERIMETER_STORAGE_BACKEND` | `file` in the service; `postgres` in Compose | Persistence selection: `file` or `postgres`. |
+| `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`; the PostgreSQL Compose overlay selects `postgres`. |
 | `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`; local development can use `sslmode=disable`. |
 | `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source `config.json`; import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
 | `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |

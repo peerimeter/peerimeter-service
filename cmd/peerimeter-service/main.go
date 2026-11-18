@@ -28,6 +28,11 @@ func main() {
 		os.Exit(2)
 	}
 	var importSnapshot configstore.Snapshot
+	if cfg.StorageBackend == "postgres" && cfg.ImportFile == "" {
+		if fileStoreMayContainData(cfg.DataFile) {
+			logger.Warn("file-backed data may be ignored by the PostgreSQL backend; set PEERIMETER_IMPORT_FILE to import it, or set PEERIMETER_STORAGE_BACKEND=file to keep using file storage")
+		}
+	}
 	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
 		info, err := os.Stat(cfg.ImportFile)
 		if err != nil || !info.Mode().IsRegular() {
@@ -115,4 +120,17 @@ func main() {
 		logger.Error("shutdown HTTP server", "error", err)
 		os.Exit(1)
 	}
+}
+
+func fileStoreMayContainData(indexPath string) bool {
+	if info, err := os.Stat(indexPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		return true
+	}
+	for _, name := range []string{"nodes", "registrations"} {
+		entries, err := os.ReadDir(filepath.Join(filepath.Dir(indexPath), name))
+		if err == nil && len(entries) > 0 {
+			return true
+		}
+	}
+	return false
 }
