@@ -88,7 +88,8 @@ can forward requests to `127.0.0.1:8080`.
 - For remote PostgreSQL or Supabase, set `PEERIMETER_STORAGE_BACKEND=postgres`
   and `PEERIMETER_DATABASE_URL` in `.env`, then run `docker compose up -d`.
   Use a direct connection or Supabase Session pooler. Transaction poolers do
-  not keep the session Goose migrations need.
+  not keep the session Goose migrations need. Quote the whole database URL in
+  `.env`, especially when it contains `&` query parameters.
 
 The bundled PostgreSQL container starts in every Compose mode and stores its
 data in a persistent `postgres-data` volume. It has no published host port.
@@ -105,8 +106,9 @@ and server name. Publicly trusted certificates work without extra setup.
 If the database uses a private CA that the container does not already trust,
 mount the CA certificate read-only. The service needs it to verify the database;
 a host file is not visible inside the container by default. Add this under the
-`peerimeter-service` service in the existing `compose.yaml`; do not replace the
-file with this snippet. Replace the host path with the path to your CA file:
+existing `volumes:` list for `peerimeter-service` in `compose.yaml`, keeping the
+other mounts such as `./data:/var/lib/peerimeter`. Do not replace the file with
+this snippet. Replace the host path with the path to your CA file:
 
 ```yaml
       - /absolute/path/private-ca.pem:/run/peerimeter/private-ca.pem:ro
@@ -121,7 +123,10 @@ prevents writes but does not grant read access.
 ### Back up your data
 
 For file storage, back up the whole `data/` directory. It contains
-`config.json` and the adjacent `nodes/` and `registrations/` directories.
+`config.json`, adjacent `nodes/` and `registrations/` directories, and the
+legacy `config.json.registrations/` directory if present. Stop all file-backed
+writers before copying the directory, or use a filesystem-consistent snapshot
+of the whole directory; the service does not coordinate multi-file backups.
 
 The bundled PostgreSQL database can be backed up with `pg_dump`. This command
 targets the database named by `POSTGRES_DB`; use it only when
@@ -171,9 +176,22 @@ environment values inside a subshell:
 )
 ```
 
-For a private CA, the certificate URL used by a host-side `pg_dump` must point
-to a file readable by the host. A certificate mounted only inside the service
-container is not available to the host client. Keep `sslmode=verify-full`.
+For a private CA, the container URL uses the mounted path
+`/run/peerimeter/private-ca.pem`. The container user (UID/GID `1000:1000`, or
+its mapped host user) must be able to read the CA file; `:ro` prevents writes
+but does not grant read access.
+
+For a host-side `pg_dump`, the certificate path must be readable on the host.
+Export a host-side URL before running the backup command; the command preserves
+an exported value instead of replacing it with the URL from `.env`:
+
+```sh
+export PEERIMETER_DATABASE_URL='postgres://USER:PERCENT_ENCODED_PASSWORD@HOST:5432/DB?sslmode=verify-full&sslrootcert=%2Fabsolute%2Fpath%2Fprivate-ca.pem'
+```
+
+Use the mounted container path in `.env` for the service. The host-side URL is
+for the backup command only; its certificate path is not available in the
+container.
 
 ### Import an existing file store
 
@@ -198,11 +216,13 @@ container is not available to the host client. Keep `sslmode=verify-full`.
    and requires empty PostgreSQL tables. It warns if file data exists without
    an import path.
 7. Check `docker compose logs peerimeter-service` for the successful import
-   message (`imported file store into empty PostgreSQL database`), then verify
-   the imported data. Keep the original files and back up the database. Remove
-   both import settings from `.env`.
+   message (`imported file store into empty PostgreSQL database`). Keep the
+   original files until the import succeeds, then remove both import settings
+   from `.env`.
 8. Recreate the container with `docker compose up -d peerimeter-service`. A
    restart alone does not apply `.env` changes.
+9. Verify the imported data and back up the database before deleting the
+   original files.
 
 The index file must exist and be a regular file unless you are importing a
 sidecar-only store. This prevents a typo in its path from silently importing
