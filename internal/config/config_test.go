@@ -96,12 +96,13 @@ func TestLoadSidecarOnlyImportRequiresPostgresAndImportPath(t *testing.T) {
 	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
 	t.Setenv("PEERIMETER_IMPORT_SIDECAR_ONLY", "true")
 	t.Setenv("PEERIMETER_STORAGE_BACKEND", "file")
-	t.Setenv("PEERIMETER_IMPORT_FILE", "")
+	t.Setenv("PEERIMETER_IMPORT_FILE", "/tmp/config.json")
 	if _, err := Load(); err == nil {
 		t.Fatal("sidecar-only flag accepted without PostgreSQL import settings")
 	}
 	t.Setenv("PEERIMETER_STORAGE_BACKEND", "postgres")
 	t.Setenv("PEERIMETER_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("PEERIMETER_IMPORT_FILE", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("sidecar-only flag accepted without import path")
 	}
