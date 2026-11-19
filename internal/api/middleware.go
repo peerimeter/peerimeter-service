@@ -55,3 +55,15 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func (a *API) authenticateManagement(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		managementOK := a.key != "" && len(provided) == len(a.key) && subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) == 1
+		if !managementOK || provided == r.Header.Get("Authorization") {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

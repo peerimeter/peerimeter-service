@@ -59,7 +59,7 @@ func New(key, publicURL string, store configStore, logger *slog.Logger, requireH
 		r.Get("/api/v1/networks/{networkID}", a.getNetworkMetadata)
 		r.Get("/api/v1/networks/{networkID}/config", a.getNetwork)
 		r.Get("/api/v1/networks/{networkID}/peers", a.listAllPeers)
-		r.Put("/api/v1/networks/{networkID}/config", a.putNetwork)
+		r.With(a.authenticateManagement).Put("/api/v1/networks/{networkID}/config", a.putNetwork)
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.getNode)
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/peers", a.listPeers)
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/registration", a.registerNode)
