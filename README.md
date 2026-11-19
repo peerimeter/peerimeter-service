@@ -256,7 +256,7 @@ incomplete data.
 
 ## API
 
-All routes except `GET /healthz` require
+All routes except `GET /healthz` and `GET /health` require
 `Authorization: Bearer <credential>`. Management calls use
 `PEERIMETER_API_KEY`; agent join bundles contain a network-scoped enrollment
 token. Requests and responses use JSON. Config and registration documents use
@@ -264,7 +264,7 @@ token. Requests and responses use JSON. Config and registration documents use
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/healthz` | Unauthenticated health check (`204` when healthy). |
+| `GET` | `/healthz`, `/health` | Unauthenticated health checks (`204` when healthy; PostgreSQL-backed storage returns `503` when the database cannot be reached). |
 | `GET` | `/api/v1/networks` | List managed network metadata. |
 | `POST` | `/api/v1/networks` | Create a managed network. |
 | `GET` | `/api/v1/networks/{networkID}` | Read network metadata. |

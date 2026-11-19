@@ -48,7 +48,8 @@ fi</pre>
   -H 'Content-Type: application/json' \
   -d '{"version":1,"id":"home","name":"Home","cidr":"10.90.0.0/24"}' \
   http://127.0.0.1:8080/api/v1/networks</pre>
-<h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
+<h3>Check the service</h3><p class="muted">The commands above check the local source setup over loopback HTTP. The unauthenticated <code>/healthz</code> and <code>/health</code> endpoints verify PostgreSQL connectivity when PostgreSQL storage is configured. Once an HTTPS reverse proxy is configured, verify its public URL with these additional checks:</p><pre>curl --fail https://service.example.com/healthz
+curl --fail https://service.example.com/health
 curl --fail -H "Authorization: Bearer $PEERIMETER_API_KEY" \
   'https://service.example.com/api/v1/join-bundle?network_id=home'</pre>
 <p class="muted">Managed agents use <code>join</code> to enroll and <code>sync</code> to refresh registration and reconcile peers. The older one-shot <code>config pull/push</code> commands are no longer available. See the <a href="https://github.com/peerimeter/peerimeter-agent#readme">agent README</a>.</p></section>

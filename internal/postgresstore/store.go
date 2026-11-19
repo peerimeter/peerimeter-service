@@ -342,6 +342,18 @@ func (s *Store) Close() error {
 	return db.Close()
 }
 
+// Ping checks that the PostgreSQL connection pool can reach the database.
+func (s *Store) Ping(ctx context.Context) error {
+	db, err := s.db.DB()
+	if err != nil {
+		return fmt.Errorf("get PostgreSQL connection pool: %w", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping PostgreSQL: %w", err)
+	}
+	return nil
+}
+
 // ImportSnapshot copies the legacy file store into an empty PostgreSQL database.
 // It is all-or-nothing and refuses to merge or overwrite an existing database.
 func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapshot) error {
