@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,85 +22,31 @@ import (
 	"github.com/peerimeter/peerimeter-service/internal/postgresstore"
 )
 
-func runServer() {
+type serviceStore interface {
+	GetNetwork(context.Context, string) (json.RawMessage, error)
+	GetNetworkMetadata(context.Context, string) (json.RawMessage, error)
+	GetNode(context.Context, string, string) (json.RawMessage, error)
+	ListRegisteredNodes(context.Context, string) (map[string]json.RawMessage, error)
+	ListNetworks(context.Context) (map[string]json.RawMessage, error)
+	CreateNetwork(context.Context, string, json.RawMessage) error
+	RegisterNode(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
+	PutNetwork(context.Context, string, json.RawMessage) error
+	PutNode(context.Context, string, string, json.RawMessage) error
+}
+
+func runServer() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("load configuration", "error", err)
-		os.Exit(2)
+		return fmt.Errorf("load configuration: %w", err)
 	}
-	var importSnapshot configstore.Snapshot
-	if cfg.StorageBackend == "postgres" && cfg.ImportFile == "" {
-		if fileStoreMayContainData(cfg.DataFile) {
-			logger.Warn("file-backed data may be ignored by the PostgreSQL backend; set PEERIMETER_IMPORT_FILE to import it, or set PEERIMETER_STORAGE_BACKEND=file to keep using file storage")
-		}
+	importSnapshot, err := loadImportSnapshot(cfg, logger)
+	if err != nil {
+		return err
 	}
-	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
-		if err := validateImportIndex(cfg.ImportFile, cfg.ImportSidecarOnly); err != nil {
-			logger.Error("open file store for import", "error", err, "data_file", filepath.Base(cfg.ImportFile))
-			os.Exit(1)
-		}
-		legacy, err := configstore.Open(cfg.ImportFile, 128)
-		if err != nil {
-			logger.Error("open file store for import", "error", err)
-			os.Exit(1)
-		}
-		importSnapshot = legacy.Snapshot()
-		legacy.Close()
-		if importSnapshot.Empty() {
-			logger.Error("import file store into PostgreSQL", "error", "source contains no persisted network, node, or registration data")
-			os.Exit(1)
-		}
-	}
-
-	var store interface {
-		GetNetwork(context.Context, string) (json.RawMessage, error)
-		GetNetworkMetadata(context.Context, string) (json.RawMessage, error)
-		GetNode(context.Context, string, string) (json.RawMessage, error)
-		ListRegisteredNodes(context.Context, string) (map[string]json.RawMessage, error)
-		ListNetworks(context.Context) (map[string]json.RawMessage, error)
-		CreateNetwork(context.Context, string, json.RawMessage) error
-		RegisterNode(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
-		PutNetwork(context.Context, string, json.RawMessage) error
-		PutNode(context.Context, string, string, json.RawMessage) error
-	}
-	var closeStore func()
-	if cfg.StorageBackend == "postgres" {
-		var db *postgresstore.Store
-		var err error
-		tlsOptions := postgresstore.TLSOptions{
-			CACertPEM:           cfg.DatabaseCACert,
-			AllowSSLModeRequire: cfg.DatabaseAllowSSLModeRequire,
-		}
-		if cfg.AutoMigrate {
-			db, err = postgresstore.Open(cfg.DatabaseURL, tlsOptions)
-		} else {
-			logger.Info("automatic PostgreSQL migrations are disabled")
-			db, err = postgresstore.OpenWithoutMigrations(cfg.DatabaseURL, tlsOptions)
-		}
-		if err != nil {
-			logger.Error("open PostgreSQL store", "error", err)
-			os.Exit(1)
-		}
-		if cfg.ImportFile != "" {
-			err = db.ImportSnapshot(context.Background(), importSnapshot)
-			if err != nil {
-				logger.Error("import file store into PostgreSQL", "error", err)
-				_ = db.Close()
-				os.Exit(1)
-			}
-			logger.Info("imported file store into empty PostgreSQL database", "data_file", cfg.ImportFile)
-		}
-		store = db
-		closeStore = func() { _ = db.Close() }
-	} else {
-		fileStore, err := configstore.Open(cfg.DataFile, 128)
-		if err != nil {
-			logger.Error("open configuration store", "error", err)
-			os.Exit(1)
-		}
-		store = fileStore
-		closeStore = fileStore.Close
+	store, closeStore, err := openStore(cfg, importSnapshot, logger)
+	if err != nil {
+		return err
 	}
 	defer closeStore()
 
@@ -128,13 +75,73 @@ func runServer() {
 	}
 	logger.Info("starting peerimeter service", startupAttrs...)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("serve HTTP", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("serve HTTP: %w", err)
 	}
 	if err := <-shutdownResult; err != nil {
-		logger.Error("shutdown HTTP server", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("shutdown HTTP server: %w", err)
 	}
+	return nil
+}
+
+func loadImportSnapshot(cfg config.Config, logger *slog.Logger) (configstore.Snapshot, error) {
+	var importSnapshot configstore.Snapshot
+	if cfg.StorageBackend == "postgres" && cfg.ImportFile == "" {
+		if fileStoreMayContainData(cfg.DataFile) {
+			logger.Warn("file-backed data may be ignored by the PostgreSQL backend; set PEERIMETER_IMPORT_FILE to import it, or set PEERIMETER_STORAGE_BACKEND=file to keep using file storage")
+		}
+	}
+	if cfg.StorageBackend == "postgres" && cfg.ImportFile != "" {
+		if err := validateImportIndex(cfg.ImportFile, cfg.ImportSidecarOnly); err != nil {
+			return importSnapshot, fmt.Errorf("open file store for import %s: %w", filepath.Base(cfg.ImportFile), err)
+		}
+		legacy, err := configstore.Open(cfg.ImportFile, 128)
+		if err != nil {
+			return importSnapshot, fmt.Errorf("open file store for import: %w", err)
+		}
+		importSnapshot = legacy.Snapshot()
+		legacy.Close()
+		if importSnapshot.Empty() {
+			return importSnapshot, errors.New("import file store into PostgreSQL: source contains no persisted network, node, or registration data")
+		}
+	}
+	return importSnapshot, nil
+}
+
+func openStore(cfg config.Config, importSnapshot configstore.Snapshot, logger *slog.Logger) (serviceStore, func(), error) {
+	if cfg.StorageBackend == "postgres" {
+		var db *postgresstore.Store
+		var err error
+		tlsOptions := postgresstore.TLSOptions{
+			CACertPEM:           cfg.DatabaseCACert,
+			AllowSSLModeRequire: cfg.DatabaseAllowSSLModeRequire,
+		}
+		if cfg.AutoMigrate {
+			db, err = postgresstore.Open(cfg.DatabaseURL, tlsOptions)
+		} else {
+			logger.Info("automatic PostgreSQL migrations are disabled")
+			db, err = postgresstore.OpenWithoutMigrations(cfg.DatabaseURL, tlsOptions)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("open PostgreSQL store: %w", err)
+		}
+		if cfg.ImportFile != "" {
+			err = db.ImportSnapshot(context.Background(), importSnapshot)
+			if err != nil {
+				_ = db.Close()
+				return nil, nil, fmt.Errorf("import file store into PostgreSQL: %w", err)
+			}
+			logger.Info("imported file store into empty PostgreSQL database", "data_file", cfg.ImportFile)
+		}
+		return db, func() { _ = db.Close() }, nil
+	}
+	if cfg.StorageBackend == "file" {
+		fileStore, err := configstore.Open(cfg.DataFile, 128)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open configuration store: %w", err)
+		}
+		return fileStore, fileStore.Close, nil
+	}
+	return nil, nil, errors.New("unsupported storage backend")
 }
 
 func migrateFromEnvironment() error {

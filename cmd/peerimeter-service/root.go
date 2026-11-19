@@ -23,8 +23,8 @@ func newRootCommand() *cobra.Command {
 		Use:   "serve",
 		Short: "Run the Peerimeter HTTP service",
 		Args:  cobra.NoArgs,
-		Run: func(_ *cobra.Command, _ []string) {
-			runServer()
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runServer()
 		},
 	})
 	root.AddCommand(&cobra.Command{

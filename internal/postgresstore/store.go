@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 	"github.com/peerimeter/peerimeter-service/internal/networking"
+	"github.com/peerimeter/peerimeter-service/internal/noderegistration"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 	"gorm.io/datatypes"
@@ -517,65 +518,24 @@ func (s *Store) RegisterNode(ctx context.Context, networkID, nodeID string, valu
 		} else if err != nil {
 			return err
 		}
-		var current map[string]json.RawMessage
-		if err := json.Unmarshal(value, &current); err != nil || current == nil {
-			return errors.New("invalid node registration")
-		}
-		var publicKey string
-		if err := json.Unmarshal(current["public_key"], &publicKey); err != nil || strings.TrimSpace(publicKey) == "" {
-			return errors.New("invalid node registration public key")
-		}
 		var rows []registrationRow
 		if err := tx.Where("network_id = ?", networkID).Find(&rows).Error; err != nil {
 			return err
 		}
-		var existing *registrationRow
-		for i := range rows {
-			if rows[i].NodeID == nodeID {
-				existing = &rows[i]
-				continue
-			}
-			if rows[i].PublicKey == publicKey {
-				return configstore.ErrDuplicateKey
-			}
+		registrations := make(map[string]json.RawMessage, len(rows))
+		for _, row := range rows {
+			registrations[row.NodeID] = json.RawMessage(row.Document)
 		}
-		if existing != nil {
-			if existing.PublicKey != publicKey {
-				return configstore.ErrNodeConflict
-			}
-			var old map[string]json.RawMessage
-			if json.Unmarshal(existing.Document, &old) == nil && len(old["tunnel_address"]) > 0 {
-				current["tunnel_address"] = old["tunnel_address"]
-			}
-		} else {
-			if len(rows) >= 1024 {
-				return configstore.ErrNoAddress
-			}
-			prefix, err := networkPrefix(json.RawMessage(network.Metadata))
-			if err != nil {
-				return errors.New("network has no valid address pool")
-			}
-			used := make(map[netip.Addr]bool, len(rows))
-			for _, row := range rows {
-				var old map[string]json.RawMessage
-				if json.Unmarshal(row.Document, &old) == nil {
-					var ip string
-					if json.Unmarshal(old["tunnel_address"], &ip) == nil {
-						if address, err := netip.ParseAddr(ip); err == nil {
-							used[address] = true
-						}
-					}
-				}
-			}
-			address, ok := nextAddress(prefix, used)
-			if !ok {
-				return configstore.ErrNoAddress
-			}
-			current["tunnel_address"], _ = json.Marshal(address.String())
-		}
-		current["node_id"], _ = json.Marshal(nodeID)
-		encoded, err := json.Marshal(current)
+		encoded, err := noderegistration.Document(nodeID, value, json.RawMessage(network.Metadata), registrations)
 		if err != nil {
+			return err
+		}
+		var registered map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &registered); err != nil {
+			return err
+		}
+		var publicKey string
+		if err := json.Unmarshal(registered["public_key"], &publicKey); err != nil {
 			return err
 		}
 		output = encoded
@@ -614,7 +574,4 @@ func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
 		return netip.Prefix{}, configstore.ErrInvalidNetwork
 	}
 	return prefix, nil
-}
-func nextAddress(prefix netip.Prefix, used map[netip.Addr]bool) (netip.Addr, bool) {
-	return networking.NextAddress(prefix, used)
 }

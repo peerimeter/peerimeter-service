@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/peerimeter/peerimeter-service/internal/networking"
+	"github.com/peerimeter/peerimeter-service/internal/noderegistration"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,9 +24,9 @@ var (
 	ErrNotFound       = errors.New("configuration not found")
 	ErrInvalidID      = errors.New("network or node ID is invalid")
 	ErrExists         = errors.New("network already exists")
-	ErrNoAddress      = errors.New("network has no available node addresses")
-	ErrNodeConflict   = errors.New("node ID is already registered with a different public key")
-	ErrDuplicateKey   = errors.New("WireGuard public key is already registered in this network")
+	ErrNoAddress      = noderegistration.ErrNoAddress
+	ErrNodeConflict   = noderegistration.ErrNodeConflict
+	ErrDuplicateKey   = noderegistration.ErrDuplicateKey
 	ErrCIDROverlap    = errors.New("network CIDR overlaps another network")
 	ErrInvalidNetwork = errors.New("network configuration is invalid")
 )
@@ -775,58 +776,8 @@ func yamlValueJSON(node *yaml.Node) (any, error) {
 }
 
 func registerNodeDocument(n network, registration json.RawMessage, nodeID string) (json.RawMessage, error) {
-	var current map[string]json.RawMessage
-	if err := json.Unmarshal(registration, &current); err != nil || current == nil {
-		return nil, errors.New("invalid node registration")
-	}
 	if n.Registrations == nil {
 		n.Registrations = make(map[string]json.RawMessage)
 	}
-	for id, previous := range n.Registrations {
-		if id == nodeID {
-			continue
-		}
-		var old map[string]json.RawMessage
-		if json.Unmarshal(previous, &old) == nil && string(old["public_key"]) == string(current["public_key"]) {
-			return nil, ErrDuplicateKey
-		}
-	}
-	if previous, ok := n.Registrations[nodeID]; ok {
-		var old map[string]json.RawMessage
-		if err := json.Unmarshal(previous, &old); err == nil {
-			if string(old["public_key"]) != string(current["public_key"]) {
-				return nil, ErrNodeConflict
-			}
-			if len(old["tunnel_address"]) != 0 {
-				current["tunnel_address"] = old["tunnel_address"]
-			}
-		}
-	} else {
-		if len(n.Registrations) >= 1024 {
-			return nil, ErrNoAddress
-		}
-		prefix, err := networkPrefix(n.Metadata)
-		if err != nil {
-			return nil, errors.New("network has no valid address pool")
-		}
-		used := make(map[netip.Addr]bool, len(n.Registrations))
-		for _, raw := range n.Registrations {
-			var entry struct {
-				Address string `json:"tunnel_address"`
-			}
-			if json.Unmarshal(raw, &entry) == nil {
-				if address, err := netip.ParseAddr(entry.Address); err == nil {
-					used[address] = true
-				}
-			}
-		}
-		address, ok := networking.NextAddress(prefix, used)
-		if !ok {
-			return nil, ErrNoAddress
-		}
-		value, _ := json.Marshal(address.String())
-		current["tunnel_address"] = value
-	}
-	current["node_id"], _ = json.Marshal(nodeID)
-	return json.Marshal(current)
+	return noderegistration.Document(nodeID, registration, n.Metadata, n.Registrations)
 }
