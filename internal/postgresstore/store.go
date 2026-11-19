@@ -212,12 +212,57 @@ func databaseURLSSLMode(databaseURL string) string {
 	if parsed, err := url.Parse(databaseURL); err == nil && parsed.Scheme != "" {
 		return parsed.Query().Get("sslmode")
 	}
-	for _, field := range strings.Fields(databaseURL) {
-		if key, value, ok := strings.Cut(field, "="); ok && key == "sslmode" {
-			return strings.Trim(value, "\"'")
+	sslmode := ""
+	for remaining := databaseURL; len(remaining) > 0; {
+		eqIndex := strings.IndexByte(remaining, '=')
+		if eqIndex < 0 {
+			return ""
+		}
+		key := strings.Trim(remaining[:eqIndex], " \t\n\r\v\f")
+		remaining = strings.TrimLeft(remaining[eqIndex+1:], " \t\n\r\v\f")
+		value := ""
+		if len(remaining) > 0 && remaining[0] == '\'' {
+			remaining = remaining[1:]
+			end := 0
+			for ; end < len(remaining); end++ {
+				if remaining[end] == '\\' {
+					end++
+					continue
+				}
+				if remaining[end] == '\'' {
+					break
+				}
+			}
+			if end == len(remaining) {
+				return ""
+			}
+			value = strings.ReplaceAll(strings.ReplaceAll(remaining[:end], "\\\\", "\\"), "\\'", "'")
+			remaining = remaining[end+1:]
+		} else {
+			end := 0
+			for ; end < len(remaining); end++ {
+				if strings.ContainsRune(" \t\n\r\v\f", rune(remaining[end])) {
+					break
+				}
+				if remaining[end] == '\\' {
+					end++
+					if end == len(remaining) {
+						return ""
+					}
+				}
+			}
+			value = strings.ReplaceAll(strings.ReplaceAll(remaining[:end], "\\\\", "\\"), "\\'", "'")
+			if end == len(remaining) {
+				remaining = ""
+			} else {
+				remaining = remaining[end+1:]
+			}
+		}
+		if key == "sslmode" {
+			sslmode = value
 		}
 	}
-	return ""
+	return sslmode
 }
 
 func appendDatabaseCACert(config *pgconn.Config, certPEM string) error {
@@ -228,7 +273,6 @@ func appendDatabaseCACert(config *pgconn.Config, certPEM string) error {
 		return errors.New("PEERIMETER_DATABASE_CA_CERT must contain a valid PEM certificate")
 	}
 	if config.TLSConfig != nil {
-		config.TLSConfig = config.TLSConfig.Clone()
 		roots, err := rootsWithDatabaseCACert(config.TLSConfig.RootCAs, certPEM)
 		if err != nil {
 			return err
@@ -239,7 +283,6 @@ func appendDatabaseCACert(config *pgconn.Config, certPEM string) error {
 		if fallback.TLSConfig == nil {
 			continue
 		}
-		config.Fallbacks[i].TLSConfig = fallback.TLSConfig.Clone()
 		roots, err := rootsWithDatabaseCACert(fallback.TLSConfig.RootCAs, certPEM)
 		if err != nil {
 			return err
