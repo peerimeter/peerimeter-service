@@ -53,7 +53,7 @@ func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
 	get.Header.Set("Origin", "https://dashboard.example.test")
 	getResult := httptest.NewRecorder()
 	handler.ServeHTTP(getResult, get)
-	if getResult.Code != http.StatusNoContent || getResult.Header().Get("Access-Control-Allow-Origin") != "https://dashboard.example.test" {
+	if getResult.Code != http.StatusOK || getResult.Header().Get("Access-Control-Allow-Origin") != "https://dashboard.example.test" {
 		t.Fatalf("allowed-origin GET = %d, headers %v", getResult.Code, getResult.Header())
 	}
 }
@@ -84,7 +84,7 @@ func TestHealthIsUnauthenticatedAndConfigIsProtected(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want int
-	}{{"/healthz", http.StatusNoContent}, {"/api/v1/networks/net-a/config", http.StatusUnauthorized}} {
+	}{{"/healthz", http.StatusOK}, {"/health", http.StatusNoContent}, {"/api/v1/networks/net-a/config", http.StatusUnauthorized}} {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)

@@ -56,8 +56,8 @@ func New(key, publicURL string, store configStore, logger *slog.Logger, requireH
 	}
 	r := chi.NewRouter()
 	r.Use(a.cors)
-	r.Get("/healthz", a.health)
-	r.Get("/health", a.health)
+	r.Get("/healthz", a.liveness)
+	r.Get("/health", a.readiness)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Get("/api/v1/join-bundle", a.joinBundle)
@@ -75,7 +75,13 @@ func New(key, publicURL string, store configStore, logger *slog.Logger, requireH
 	return r
 }
 
-func (a *API) health(w http.ResponseWriter, r *http.Request) {
+func (a *API) liveness(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("{\"success\":true}\n"))
+}
+
+func (a *API) readiness(w http.ResponseWriter, r *http.Request) {
 	if checker, ok := a.store.(interface{ Ping(context.Context) error }); ok {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
