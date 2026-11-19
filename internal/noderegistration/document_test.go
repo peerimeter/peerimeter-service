@@ -47,3 +47,37 @@ func TestDocumentRejectsKeyAndNodeConflicts(t *testing.T) {
 		})
 	}
 }
+
+func TestDocumentComparesDecodedPublicKeys(t *testing.T) {
+	const metadata = `{"cidr":"10.90.0.0/24"}`
+	registrations := map[string]json.RawMessage{
+		"node-a": json.RawMessage(`{"public_key":"\u006bey-a","tunnel_address":"10.90.0.7"}`),
+	}
+
+	got, err := Document("node-a", json.RawMessage(`{"public_key":"key-a"}`), json.RawMessage(metadata), registrations)
+	if err != nil {
+		t.Fatalf("repeat registration with equivalent JSON encoding: %v", err)
+	}
+	var document struct {
+		Address string `json:"tunnel_address"`
+	}
+	if err := json.Unmarshal(got, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Address != "10.90.0.7" {
+		t.Fatalf("tunnel address = %q, want preserved address", document.Address)
+	}
+
+	if _, err := Document("node-b", json.RawMessage(`{"public_key":"key-a"}`), json.RawMessage(metadata), registrations); !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("equivalent key encoding error = %v, want %v", err, ErrDuplicateKey)
+	}
+}
+
+func TestSamePublicKeyFallsBackToRawBytesForInvalidJSON(t *testing.T) {
+	if !samePublicKey(json.RawMessage(`not-json`), json.RawMessage(`not-json`)) {
+		t.Fatal("same invalid public-key bytes should retain raw comparison behavior")
+	}
+	if samePublicKey(json.RawMessage(`not-json`), json.RawMessage(`different`)) {
+		t.Fatal("different invalid public-key bytes should not match")
+	}
+}
