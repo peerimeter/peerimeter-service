@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -66,11 +67,15 @@ func runServer() {
 	if cfg.StorageBackend == "postgres" {
 		var db *postgresstore.Store
 		var err error
+		tlsOptions := postgresstore.TLSOptions{
+			CACertPEM:           cfg.DatabaseCACert,
+			AllowSSLModeRequire: cfg.DatabaseAllowSSLModeRequire,
+		}
 		if cfg.AutoMigrate {
-			db, err = postgresstore.Open(cfg.DatabaseURL)
+			db, err = postgresstore.Open(cfg.DatabaseURL, tlsOptions)
 		} else {
 			logger.Info("automatic PostgreSQL migrations are disabled")
-			db, err = postgresstore.OpenWithoutMigrations(cfg.DatabaseURL)
+			db, err = postgresstore.OpenWithoutMigrations(cfg.DatabaseURL, tlsOptions)
 		}
 		if err != nil {
 			logger.Error("open PostgreSQL store", "error", err)
@@ -136,7 +141,18 @@ func migrateFromEnvironment() error {
 	if databaseURL == "" {
 		return errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
 	}
-	return postgresstore.Migrate(databaseURL)
+	allowSSLModeRequire := false
+	if raw := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return errors.New("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE must be a boolean")
+		}
+		allowSSLModeRequire = parsed
+	}
+	return postgresstore.Migrate(databaseURL, postgresstore.TLSOptions{
+		CACertPEM:           os.Getenv("PEERIMETER_DATABASE_CA_CERT"),
+		AllowSSLModeRequire: allowSSLModeRequire,
+	})
 }
 
 func fileStoreMayContainData(indexPath string) bool {

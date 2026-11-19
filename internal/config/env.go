@@ -11,18 +11,20 @@ import (
 
 // Config contains the service settings loaded from environment variables.
 type Config struct {
-	APIKey             string `env:"PEERIMETER_API_KEY,required"`
-	StorageBackend     string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
-	DatabaseURL        string `env:"PEERIMETER_DATABASE_URL"`
-	AutoMigrate        bool   `env:"PEERIMETER_AUTO_MIGRATE" envDefault:"true"`
-	ImportFile         string `env:"PEERIMETER_IMPORT_FILE"`
-	ImportSidecarOnly  bool   `env:"PEERIMETER_IMPORT_SIDECAR_ONLY"`
-	DataFile           string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
-	ListenAddr         string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
-	PublicAPIURL       string `env:"PEERIMETER_PUBLIC_API_URL"`
-	RequireHTTPS       bool   `env:"PEERIMETER_REQUIRE_HTTPS" envDefault:"true"`
-	CORSAllowedOrigins string `env:"PEERIMETER_CORS_ALLOWED_ORIGINS"`
-	Port               string `env:"PORT" envDefault:"8080"`
+	APIKey                      string `env:"PEERIMETER_API_KEY,required"`
+	StorageBackend              string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
+	DatabaseURL                 string `env:"PEERIMETER_DATABASE_URL"`
+	DatabaseCACert              string `env:"PEERIMETER_DATABASE_CA_CERT"`
+	DatabaseAllowSSLModeRequire bool   `env:"PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE" envDefault:"false"`
+	AutoMigrate                 bool   `env:"PEERIMETER_AUTO_MIGRATE" envDefault:"true"`
+	ImportFile                  string `env:"PEERIMETER_IMPORT_FILE"`
+	ImportSidecarOnly           bool   `env:"PEERIMETER_IMPORT_SIDECAR_ONLY"`
+	DataFile                    string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
+	ListenAddr                  string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
+	PublicAPIURL                string `env:"PEERIMETER_PUBLIC_API_URL"`
+	RequireHTTPS                bool   `env:"PEERIMETER_REQUIRE_HTTPS" envDefault:"true"`
+	CORSAllowedOrigins          string `env:"PEERIMETER_CORS_ALLOWED_ORIGINS"`
+	Port                        string `env:"PORT" envDefault:"8080"`
 }
 
 // Load reads service settings from the process environment.
@@ -39,6 +41,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StorageBackend == "postgres" && strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_URL must be set when PEERIMETER_STORAGE_BACKEND=postgres")
+	}
+	if cfg.StorageBackend != "postgres" && (cfg.DatabaseCACert != "" || cfg.DatabaseAllowSSLModeRequire) {
+		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_CA_CERT and PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE require PEERIMETER_STORAGE_BACKEND=postgres")
 	}
 	if cfg.ImportSidecarOnly && (cfg.StorageBackend != "postgres" || strings.TrimSpace(cfg.ImportFile) == "") {
 		return Config{}, fmt.Errorf("PEERIMETER_IMPORT_SIDECAR_ONLY requires PostgreSQL storage and PEERIMETER_IMPORT_FILE")

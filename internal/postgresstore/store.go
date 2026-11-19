@@ -3,6 +3,7 @@ package postgresstore
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"embed"
 	"encoding/binary"
 	"encoding/json"
@@ -13,10 +14,13 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"net/url"
 	"path/filepath"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -31,6 +35,12 @@ import (
 var migrationFiles embed.FS
 
 type Store struct{ db *gorm.DB }
+
+// TLSOptions configures PostgreSQL certificate trust and explicit sslmode=require use.
+type TLSOptions struct {
+	CACertPEM           string
+	AllowSSLModeRequire bool
+}
 
 type networkRow struct {
 	ID       string `gorm:"primaryKey"`
@@ -57,18 +67,18 @@ type registrationRow struct {
 
 func (registrationRow) TableName() string { return "registrations" }
 
-func Open(databaseURL string) (*Store, error) {
-	return open(databaseURL, true)
+func Open(databaseURL string, options ...TLSOptions) (*Store, error) {
+	return open(databaseURL, true, firstTLSOptions(options))
 }
 
 // OpenWithoutMigrations connects to PostgreSQL without applying schema changes.
-func OpenWithoutMigrations(databaseURL string) (*Store, error) {
-	return open(databaseURL, false)
+func OpenWithoutMigrations(databaseURL string, options ...TLSOptions) (*Store, error) {
+	return open(databaseURL, false, firstTLSOptions(options))
 }
 
 // Migrate applies all pending embedded PostgreSQL migrations.
-func Migrate(databaseURL string) error {
-	store, err := open(databaseURL, false)
+func Migrate(databaseURL string, options ...TLSOptions) error {
+	store, err := open(databaseURL, false, firstTLSOptions(options))
 	if err != nil {
 		return err
 	}
@@ -99,8 +109,22 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-func open(databaseURL string, autoMigrate bool) (*Store, error) {
-	if err := validateTLSMode(databaseURL); err != nil {
+func firstTLSOptions(options []TLSOptions) TLSOptions {
+	if len(options) == 0 {
+		return TLSOptions{}
+	}
+	return options[0]
+}
+
+func open(databaseURL string, autoMigrate bool, options TLSOptions) (*Store, error) {
+	pgConfig, err := pgx.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, errors.New("PostgreSQL URL is invalid")
+	}
+	if err := validateTLSConfig(databaseURL, &pgConfig.Config, options.AllowSSLModeRequire); err != nil {
+		return nil, err
+	}
+	if err := appendDatabaseCACert(&pgConfig.Config, options.CACertPEM); err != nil {
 		return nil, err
 	}
 	dbLogger := gormlogger.New(log.New(io.Discard, "", 0), gormlogger.Config{
@@ -108,7 +132,7 @@ func open(databaseURL string, autoMigrate bool) (*Store, error) {
 		IgnoreRecordNotFoundError: true,
 		ParameterizedQueries:      true,
 	})
-	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{Logger: dbLogger})
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: stdlib.OpenDB(*pgConfig)}), &gorm.Config{Logger: dbLogger})
 	if err != nil {
 		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
@@ -130,11 +154,7 @@ func open(databaseURL string, autoMigrate bool) (*Store, error) {
 	return store, nil
 }
 
-func validateTLSMode(databaseURL string) error {
-	config, err := pgconn.ParseConfig(databaseURL)
-	if err != nil {
-		return errors.New("PostgreSQL URL is invalid")
-	}
+func validateTLSConfig(databaseURL string, config *pgconn.Config, allowSSLModeRequire bool) error {
 	endpoints := make([]pgEndpoint, 0, 1+len(config.Fallbacks))
 	endpoints = append(endpoints, pgEndpoint{host: config.Host, tls: config.TLSConfig})
 	for _, fallback := range config.Fallbacks {
@@ -165,7 +185,85 @@ func validateTLSMode(databaseURL string) error {
 	if allTLSVerified {
 		return nil
 	}
-	return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=disable is allowed only for local development hosts")
+	if allowSSLModeRequire && databaseURLSSLMode(databaseURL) == "require" && allEndpointsUseTLS(endpoints) {
+		return nil
+	}
+	return errors.New("PostgreSQL connections require sslmode=verify-full; sslmode=require needs PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE=true, and sslmode=disable is allowed only for local development hosts")
+}
+
+func validateTLSMode(databaseURL string) error {
+	config, err := pgconn.ParseConfig(databaseURL)
+	if err != nil {
+		return errors.New("PostgreSQL URL is invalid")
+	}
+	return validateTLSConfig(databaseURL, config, false)
+}
+
+func allEndpointsUseTLS(endpoints []pgEndpoint) bool {
+	for _, endpoint := range endpoints {
+		if endpoint.tls == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func databaseURLSSLMode(databaseURL string) string {
+	if parsed, err := url.Parse(databaseURL); err == nil && parsed.Scheme != "" {
+		return parsed.Query().Get("sslmode")
+	}
+	for _, field := range strings.Fields(databaseURL) {
+		if key, value, ok := strings.Cut(field, "="); ok && key == "sslmode" {
+			return strings.Trim(value, "\"'")
+		}
+	}
+	return ""
+}
+
+func appendDatabaseCACert(config *pgconn.Config, certPEM string) error {
+	if strings.TrimSpace(certPEM) == "" {
+		return nil
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM([]byte(certPEM)) {
+		return errors.New("PEERIMETER_DATABASE_CA_CERT must contain a valid PEM certificate")
+	}
+	if config.TLSConfig != nil {
+		config.TLSConfig = config.TLSConfig.Clone()
+		roots, err := rootsWithDatabaseCACert(config.TLSConfig.RootCAs, certPEM)
+		if err != nil {
+			return err
+		}
+		config.TLSConfig.RootCAs = roots
+	}
+	for i, fallback := range config.Fallbacks {
+		if fallback.TLSConfig == nil {
+			continue
+		}
+		config.Fallbacks[i].TLSConfig = fallback.TLSConfig.Clone()
+		roots, err := rootsWithDatabaseCACert(fallback.TLSConfig.RootCAs, certPEM)
+		if err != nil {
+			return err
+		}
+		config.Fallbacks[i].TLSConfig.RootCAs = roots
+	}
+	return nil
+}
+
+func rootsWithDatabaseCACert(existing *x509.CertPool, certPEM string) (*x509.CertPool, error) {
+	roots := existing
+	if roots != nil {
+		roots = roots.Clone()
+	} else {
+		var err error
+		roots, err = x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+	}
+	if !roots.AppendCertsFromPEM([]byte(certPEM)) {
+		return nil, errors.New("PEERIMETER_DATABASE_CA_CERT must contain a valid PEM certificate")
+	}
+	return roots, nil
 }
 
 type pgEndpoint struct {

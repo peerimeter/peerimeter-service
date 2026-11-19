@@ -106,8 +106,16 @@ database settings from `.env` and does not require the API key.
 ### Secure remote database connections
 
 Use `sslmode=verify-full` for remote databases. It verifies the certificate
-and server name. Publicly trusted certificates work without extra setup.
-`sslmode=disable` is only for local development hosts and the bundled database.
+and server name. Publicly trusted certificates work without extra setup. To
+trust a private CA without mounting a file, set `PEERIMETER_DATABASE_CA_CERT`
+to its PEM certificate; it is added to the system trust store for this
+database connection. `sslmode=disable` is only for local development hosts and
+the bundled database.
+
+`sslmode=require` encrypts traffic without verifying the server certificate.
+The service rejects it by default. To explicitly allow it, set
+`PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE=true`; this setting does not allow
+remote `sslmode=disable` connections.
 
 If the database uses a private CA that the container does not already trust,
 mount the CA certificate read-only. The service needs it to verify the database;
@@ -377,7 +385,9 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | --- | --- | --- |
 | `PEERIMETER_API_KEY` | Required | Shared management credential. Use a high-entropy secret. |
 | `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`. |
-| `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`; local development can use `sslmode=disable`. |
+| `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`, unless `PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE=true`; local development can use `sslmode=disable`. |
+| `PEERIMETER_DATABASE_CA_CERT` | Empty | Optional PEM CA certificate added to the system trust store for PostgreSQL TLS verification. |
+| `PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE` | `false` | Explicitly allow `sslmode=require`, which encrypts the connection but does not verify the server certificate. Does not allow remote `sslmode=disable`. |
 | `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source path; Compose uses `/var/lib/peerimeter/config.json`. Import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
 | `PEERIMETER_IMPORT_SIDECAR_ONLY` | `false` | Explicitly allow import when the `config.json` index is absent but node or registration sidecars exist. |
 | `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |
