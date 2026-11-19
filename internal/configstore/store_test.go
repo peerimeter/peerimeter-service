@@ -38,7 +38,7 @@ func TestConcurrentQueuedWritesPersistAcrossRestart(t *testing.T) {
 	if err := store.PutNetwork(context.Background(), "network-a", []byte(`{"name":"mesh"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetNode("network-a", "node-1"); err != nil {
+	if _, err := store.GetNode(context.Background(), "network-a", "node-1"); err != nil {
 		t.Fatalf("network write dropped node config in memory: %v", err)
 	}
 	store.Close()
@@ -55,11 +55,11 @@ func TestConcurrentQueuedWritesPersistAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { store.Close() }()
-	if _, err := store.GetNetwork("network-a"); err != nil {
+	if _, err := store.GetNetwork(context.Background(), "network-a"); err != nil {
 		t.Fatalf("network config missing after restart: %v", err)
 	}
 	for i := range count {
-		if _, err := store.GetNode("network-a", fmt.Sprintf("node-%d", i)); err != nil {
+		if _, err := store.GetNode(context.Background(), "network-a", fmt.Sprintf("node-%d", i)); err != nil {
 			t.Fatalf("node %d missing after restart: %v", i, err)
 		}
 	}
@@ -79,7 +79,7 @@ func TestGetMissingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.GetNode("missing", "missing"); err != ErrNotFound {
+	if _, err := store.GetNode(context.Background(), "missing", "missing"); err != ErrNotFound {
 		t.Fatalf("GetNode error = %v, want ErrNotFound", err)
 	}
 	if err := store.PutNetwork(context.Background(), "", []byte(`{"version":1}`)); err != ErrInvalidID {
@@ -116,7 +116,7 @@ func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
 		t.Fatalf("incomplete snapshot: %#v", network)
 	}
 	network.Config[0] = 'x'
-	stored, err := store.GetNetwork("mesh")
+	stored, err := store.GetNetwork(context.Background(), "mesh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestMigratesLegacyNodeDocumentsToSeparateYAMLFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.GetNode("net-a", "node-a"); err != nil {
+	if _, err := store.GetNode(context.Background(), "net-a", "node-a"); err != nil {
 		t.Fatalf("legacy node unavailable: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "nodes", "net-a", "node-a.yaml")); err != nil {
@@ -255,7 +255,7 @@ func TestYAMLNodePersistencePreservesLargeJSONIntegers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	got, err := store.GetNode("net-a", "node-a")
+	got, err := store.GetNode(context.Background(), "net-a", "node-a")
 	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) {
 		t.Fatalf("reopened node = %s, err = %v", got, err)
 	}
@@ -277,7 +277,7 @@ func TestYAMLNodePersistencePreservesLiteralNEL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	got, err := store.GetNode("net-a", "node-a")
+	got, err := store.GetNode(context.Background(), "net-a", "node-a")
 	var decoded map[string]any
 	if err == nil {
 		err = json.Unmarshal(got, &decoded)
@@ -302,7 +302,7 @@ func TestNodeWriteUsesJSONLastValueForDuplicateKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	got, err := store.GetNode("net-a", "node-a")
+	got, err := store.GetNode(context.Background(), "net-a", "node-a")
 	var decoded map[string]any
 	if err == nil {
 		err = json.Unmarshal(got, &decoded)
@@ -328,7 +328,7 @@ func TestLegacyMigrationPreservesLargeJSONIntegers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	got, err := store.GetNode("net-a", "node-a")
+	got, err := store.GetNode(context.Background(), "net-a", "node-a")
 	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) || !strings.Contains(string(got), `"name":"new"`) {
 		t.Fatalf("migrated node = %s, err = %v", got, err)
 	}
@@ -356,7 +356,7 @@ func TestCreateNetworkPersistsCIDRMetadataAndRejectsDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	got, err := store.GetNetworkMetadata("mesh-a")
+	got, err := store.GetNetworkMetadata(context.Background(), "mesh-a")
 	var actual, expected any
 	_ = json.Unmarshal(got, &actual)
 	_ = json.Unmarshal(body, &expected)
@@ -430,7 +430,7 @@ func TestConcurrentRegistrationsAllocateUniqueAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered, err := store.ListRegisteredNodes("mesh-a")
+	registered, err := store.ListRegisteredNodes(context.Background(), "mesh-a")
 	if err != nil || len(registered) != count {
 		t.Fatalf("registered nodes after restart = %d, err = %v", len(registered), err)
 	}

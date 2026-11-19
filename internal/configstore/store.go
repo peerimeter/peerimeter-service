@@ -3,7 +3,6 @@ package configstore
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/peerimeter/peerimeter-service/internal/networking"
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,13 +86,14 @@ type write struct {
 // process-local ordering and atomic single-file replacement, not multi-process
 // coordination.
 type Store struct {
-	path   string
-	queue  chan write
-	done   chan struct{}
-	closed chan struct{}
-	mu     sync.RWMutex
-	state  fileState
-	close  sync.Once
+	path     string
+	queue    chan write
+	done     chan struct{}
+	closed   chan struct{}
+	mu       sync.RWMutex
+	state    fileState
+	close    sync.Once
+	submitMu sync.Mutex
 }
 
 func Open(path string, queueSize int) (*Store, error) {
@@ -250,12 +251,14 @@ func (s *Store) migrateLegacyNodes() error {
 
 func (s *Store) Close() {
 	s.close.Do(func() {
+		s.submitMu.Lock()
 		close(s.done)
+		s.submitMu.Unlock()
 		<-s.closed
 	})
 }
 
-func (s *Store) GetNetwork(id string) (json.RawMessage, error) {
+func (s *Store) GetNetwork(_ context.Context, id string) (json.RawMessage, error) {
 	if !validID(id) {
 		return nil, ErrInvalidID
 	}
@@ -268,7 +271,7 @@ func (s *Store) GetNetwork(id string) (json.RawMessage, error) {
 	return append(json.RawMessage(nil), n.Config...), nil
 }
 
-func (s *Store) GetNetworkMetadata(id string) (json.RawMessage, error) {
+func (s *Store) GetNetworkMetadata(_ context.Context, id string) (json.RawMessage, error) {
 	if !validID(id) {
 		return nil, ErrInvalidID
 	}
@@ -281,7 +284,7 @@ func (s *Store) GetNetworkMetadata(id string) (json.RawMessage, error) {
 	return append(json.RawMessage(nil), n.Metadata...), nil
 }
 
-func (s *Store) GetNode(networkID, nodeID string) (json.RawMessage, error) {
+func (s *Store) GetNode(_ context.Context, networkID, nodeID string) (json.RawMessage, error) {
 	if !validID(networkID) || !validID(nodeID) {
 		return nil, ErrInvalidID
 	}
@@ -298,7 +301,7 @@ func (s *Store) GetNode(networkID, nodeID string) (json.RawMessage, error) {
 	return append(json.RawMessage(nil), value...), nil
 }
 
-func (s *Store) ListRegisteredNodes(networkID string) (map[string]json.RawMessage, error) {
+func (s *Store) ListRegisteredNodes(_ context.Context, networkID string) (map[string]json.RawMessage, error) {
 	if !validID(networkID) {
 		return nil, ErrInvalidID
 	}
@@ -315,7 +318,7 @@ func (s *Store) ListRegisteredNodes(networkID string) (map[string]json.RawMessag
 	return result, nil
 }
 
-func (s *Store) ListNetworks() (map[string]json.RawMessage, error) {
+func (s *Store) ListNetworks(_ context.Context) (map[string]json.RawMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make(map[string]json.RawMessage, len(s.state.Networks))
@@ -387,21 +390,18 @@ func validID(value string) bool {
 }
 
 func (s *Store) submit(ctx context.Context, op write) error {
+	s.submitMu.Lock()
 	select {
 	case <-s.done:
+		s.submitMu.Unlock()
 		return os.ErrClosed
 	case <-ctx.Done():
+		s.submitMu.Unlock()
 		return ctx.Err()
 	case s.queue <- op:
 	}
-	select {
-	case err := <-op.result:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.done:
-		return os.ErrClosed
-	}
+	s.submitMu.Unlock()
+	return <-op.result
 }
 
 func (s *Store) run() {
@@ -494,27 +494,11 @@ func (s *Store) apply(op write) error {
 }
 
 func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
-	var metadata struct {
-		CIDR string `json:"cidr"`
-	}
-	if err := json.Unmarshal(value, &metadata); err != nil {
-		return netip.Prefix{}, err
-	}
-	prefix, err := netip.ParsePrefix(metadata.CIDR)
-	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !privateIPv4Prefix(prefix) {
+	prefix, err := networking.NetworkPrefix(value)
+	if err != nil {
 		return netip.Prefix{}, ErrInvalidNetwork
 	}
 	return prefix, nil
-}
-
-func privateIPv4Prefix(prefix netip.Prefix) bool {
-	for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
-		block, _ := netip.ParsePrefix(raw)
-		if block.Contains(prefix.Addr()) && prefix.Bits() >= block.Bits() {
-			return true
-		}
-	}
-	return false
 }
 
 func cloneNetwork(n network) network {
@@ -812,14 +796,8 @@ func registerNodeDocument(n network, registration json.RawMessage, nodeID string
 		if len(n.Registrations) >= 1024 {
 			return nil, ErrNoAddress
 		}
-		var metadata struct {
-			CIDR string `json:"cidr"`
-		}
-		if err := json.Unmarshal(n.Metadata, &metadata); err != nil {
-			return nil, errors.New("network has no valid address pool")
-		}
-		prefix, err := netip.ParsePrefix(metadata.CIDR)
-		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 {
+		prefix, err := networkPrefix(n.Metadata)
+		if err != nil {
 			return nil, errors.New("network has no valid address pool")
 		}
 		used := make(map[netip.Addr]bool, len(n.Registrations))
@@ -833,21 +811,8 @@ func registerNodeDocument(n network, registration json.RawMessage, nodeID string
 				}
 			}
 		}
-		base := prefix.Masked().Addr()
-		var address netip.Addr
-		baseBytes := base.As4()
-		baseNumber := binary.BigEndian.Uint32(baseBytes[:])
-		broadcast := baseNumber | uint32((1<<(32-prefix.Bits()))-1)
-		for number := baseNumber + 1; number < broadcast; number++ {
-			var bytes [4]byte
-			binary.BigEndian.PutUint32(bytes[:], number)
-			candidate := netip.AddrFrom4(bytes)
-			if !used[candidate] {
-				address = candidate
-				break
-			}
-		}
-		if !address.IsValid() {
+		address, ok := networking.NextAddress(prefix, used)
+		if !ok {
 			return nil, ErrNoAddress
 		}
 		value, _ := json.Marshal(address.String())
