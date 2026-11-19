@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
@@ -55,7 +56,8 @@ func New(key, publicURL string, store configStore, logger *slog.Logger, requireH
 	}
 	r := chi.NewRouter()
 	r.Use(a.cors)
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	r.Get("/healthz", a.health)
+	r.Get("/health", a.health)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Get("/api/v1/join-bundle", a.joinBundle)
@@ -71,6 +73,19 @@ func New(key, publicURL string, store configStore, logger *slog.Logger, requireH
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.putNode)
 	})
 	return r
+}
+
+func (a *API) health(w http.ResponseWriter, r *http.Request) {
+	if checker, ok := a.store.(interface{ Ping(context.Context) error }); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		if err := checker.Ping(ctx); err != nil {
+			a.logger.WarnContext(ctx, "PostgreSQL health check failed", "error", err)
+			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) cors(next http.Handler) http.Handler {

@@ -122,7 +122,11 @@ func runServer() {
 		shutdownResult <- server.Shutdown(shutdownCtx)
 	}()
 
-	logger.Info("starting peerimeter service", "addr", server.Addr, "data_file", cfg.DataFile)
+	startupAttrs := []any{"addr", server.Addr, "storage_backend", cfg.StorageBackend}
+	if cfg.StorageBackend == "file" {
+		startupAttrs = append(startupAttrs, "data_file", cfg.DataFile)
+	}
+	logger.Info("starting peerimeter service", startupAttrs...)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve HTTP", "error", err)
 		os.Exit(1)
