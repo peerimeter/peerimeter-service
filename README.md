@@ -265,7 +265,7 @@ token. Requests and responses use JSON. Config and registration documents use
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/healthz` | Unauthenticated liveness check (`200` JSON `{"success":true}`); does not check dependencies. |
-| `GET` | `/health` | Unauthenticated readiness check (`204` when file storage is configured or PostgreSQL is reachable; `503` when PostgreSQL cannot be reached). |
+| `GET` | `/health` | Unauthenticated readiness check (`200` JSON `{"success":true}` when file storage is configured or PostgreSQL is reachable; `503` JSON when PostgreSQL cannot be reached; the database error is logged by the service). |
 | `GET` | `/api/v1/networks` | List managed network metadata. |
 | `POST` | `/api/v1/networks` | Create a managed network. |
 | `GET` | `/api/v1/networks/{networkID}` | Read network metadata. |
