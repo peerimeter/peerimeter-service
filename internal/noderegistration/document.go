@@ -1,6 +1,7 @@
 package noderegistration
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -35,7 +36,7 @@ func Document(nodeID string, value, metadata json.RawMessage, registrations map[
 			continue
 		}
 		var old map[string]json.RawMessage
-		if json.Unmarshal(previous, &old) == nil && string(old["public_key"]) == string(current["public_key"]) {
+		if json.Unmarshal(previous, &old) == nil && samePublicKey(old["public_key"], current["public_key"]) {
 			return nil, ErrDuplicateKey
 		}
 	}
@@ -63,7 +64,17 @@ func hasMatchingPublicKey(current map[string]json.RawMessage, previous json.RawM
 	if err := json.Unmarshal(previous, &old); err != nil {
 		return true
 	}
-	return string(old["public_key"]) == string(current["public_key"])
+	return samePublicKey(old["public_key"], current["public_key"])
+}
+
+func samePublicKey(first, second json.RawMessage) bool {
+	var firstValue, secondValue string
+	firstErr := json.Unmarshal(first, &firstValue)
+	secondErr := json.Unmarshal(second, &secondValue)
+	if firstErr != nil || secondErr != nil {
+		return bytes.Equal(first, second)
+	}
+	return firstValue == secondValue
 }
 
 func preserveExistingAddress(current map[string]json.RawMessage, previous json.RawMessage) {
