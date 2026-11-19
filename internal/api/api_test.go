@@ -82,14 +82,18 @@ func TestCORSDoesNotAllowUnknownOrigin(t *testing.T) {
 func TestHealthIsUnauthenticatedAndConfigIsProtected(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	for _, tc := range []struct {
-		path string
-		want int
-	}{{"/healthz", http.StatusOK}, {"/health", http.StatusNoContent}, {"/api/v1/networks/net-a/config", http.StatusUnauthorized}} {
+		path     string
+		want     int
+		wantBody string
+	}{{"/healthz", http.StatusOK, "{\"success\":true}\n"}, {"/health", http.StatusOK, "{\"success\":true}\n"}, {"/api/v1/networks/net-a/config", http.StatusUnauthorized, ""}} {
 		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
 		if res.Code != tc.want {
 			t.Errorf("GET %s status = %d, want %d", tc.path, res.Code, tc.want)
+		}
+		if tc.wantBody != "" && res.Body.String() != tc.wantBody {
+			t.Errorf("GET %s body = %q, want %q", tc.path, res.Body.String(), tc.wantBody)
 		}
 	}
 }

@@ -86,12 +86,15 @@ func (a *API) readiness(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
 		if err := checker.Ping(ctx); err != nil {
-			a.logger.WarnContext(ctx, "PostgreSQL health check failed", "error", err)
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+			a.logger.ErrorContext(ctx, "PostgreSQL health check failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"success": false,
+				"error":   "database unavailable",
+			})
 			return
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 func (a *API) cors(next http.Handler) http.Handler {
