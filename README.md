@@ -21,7 +21,10 @@ migrations on startup by default. Set `PEERIMETER_AUTO_MIGRATE=false` to disable
 startup migrations, then run `peerimeter-service migrate` (or `make migrate` for
 local development) to apply them explicitly. Start the HTTP service with the
 `serve` command. Transactions protect network CIDR checks and concurrent
-address allocation.
+address allocation. PostgreSQL migration 002 enables Row Level Security on
+the public service tables and Goose migration metadata table. It adds no
+anonymous or per-user policies; roles subject to RLS have no rows allowed by
+default, while the service's database-owner connection continues to operate.
 MQTT coordination, user accounts, and multi-instance API authorization are
 not included.
 
