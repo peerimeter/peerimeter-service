@@ -395,6 +395,9 @@ func (s *Store) submit(ctx context.Context, op write) error {
 	case <-s.done:
 		s.submitMu.Unlock()
 		return os.ErrClosed
+	default:
+	}
+	select {
 	case <-ctx.Done():
 		s.submitMu.Unlock()
 		return ctx.Err()
