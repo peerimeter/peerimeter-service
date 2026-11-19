@@ -37,13 +37,13 @@ func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
 		t.Fatalf("import file snapshot: %v", err)
 	}
 	t.Cleanup(func() { store.db.Exec("DELETE FROM networks WHERE id = ?", importID) })
-	if _, err := store.GetNetwork(importID); err != nil {
+	if _, err := store.GetNetwork(context.Background(), importID); err != nil {
 		t.Fatalf("imported network config missing: %v", err)
 	}
-	if _, err := store.GetNode(importID, "imported-node"); err != nil {
+	if _, err := store.GetNode(context.Background(), importID, "imported-node"); err != nil {
 		t.Fatalf("imported node config missing: %v", err)
 	}
-	imported, err := store.ListRegisteredNodes(importID)
+	imported, err := store.ListRegisteredNodes(context.Background(), importID)
 	if err != nil || len(imported) != 1 {
 		t.Fatalf("imported registrations = %d, err = %v", len(imported), err)
 	}
@@ -58,7 +58,7 @@ func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
 	if err := store.PutNetwork(ctx, networkID, json.RawMessage(`{"version":1,"nodes":[]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetNetwork(networkID); err != nil {
+	if _, err := store.GetNetwork(context.Background(), networkID); err != nil {
 		t.Fatalf("network config was not persisted: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
 	for err := range errCh {
 		t.Error(err)
 	}
-	registrations, err := store.ListRegisteredNodes(networkID)
+	registrations, err := store.ListRegisteredNodes(context.Background(), networkID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
 	if err := store.PutNode(ctx, networkID, "node-0", json.RawMessage(`{"version":1,"name":"persisted"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetNode(networkID, "node-0"); err != nil {
+	if _, err := store.GetNode(context.Background(), networkID, "node-0"); err != nil {
 		t.Fatalf("node config was not persisted: %v", err)
 	}
 }

@@ -53,11 +53,11 @@ func runServer() {
 	}
 
 	var store interface {
-		GetNetwork(string) (json.RawMessage, error)
-		GetNetworkMetadata(string) (json.RawMessage, error)
-		GetNode(string, string) (json.RawMessage, error)
-		ListRegisteredNodes(string) (map[string]json.RawMessage, error)
-		ListNetworks() (map[string]json.RawMessage, error)
+		GetNetwork(context.Context, string) (json.RawMessage, error)
+		GetNetworkMetadata(context.Context, string) (json.RawMessage, error)
+		GetNode(context.Context, string, string) (json.RawMessage, error)
+		ListRegisteredNodes(context.Context, string) (map[string]json.RawMessage, error)
+		ListNetworks(context.Context) (map[string]json.RawMessage, error)
 		CreateNetwork(context.Context, string, json.RawMessage) error
 		RegisterNode(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
 		PutNetwork(context.Context, string, json.RawMessage) error

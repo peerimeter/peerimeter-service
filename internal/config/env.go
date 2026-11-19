@@ -2,11 +2,10 @@ package config
 
 import (
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/peerimeter/peerimeter-service/internal/origin"
 )
 
 // Config contains the service settings loaded from environment variables.
@@ -49,23 +48,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PEERIMETER_IMPORT_SIDECAR_ONLY requires PostgreSQL storage and PEERIMETER_IMPORT_FILE")
 	}
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
-		origin := strings.TrimSpace(raw)
-		if origin == "" {
+		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		parsed, err := url.Parse(origin)
-		if err != nil {
-			return Config{}, fmt.Errorf("PEERIMETER_CORS_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins without paths, credentials, query, fragment, or wildcards")
-		}
-		scheme := strings.ToLower(parsed.Scheme)
-		if (scheme != "https" && scheme != "http") || parsed.Hostname() == "" || strings.HasSuffix(parsed.Host, ":") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || origin == "null" || strings.Contains(origin, "*") {
-			return Config{}, fmt.Errorf("PEERIMETER_CORS_ALLOWED_ORIGINS must contain comma-separated HTTP(S) origins without paths, credentials, query, fragment, or wildcards")
-		}
-		if port := parsed.Port(); port != "" {
-			value, err := strconv.Atoi(port)
-			if err != nil || value < 1 || value > 65535 {
-				return Config{}, fmt.Errorf("PEERIMETER_CORS_ALLOWED_ORIGINS contains an invalid port")
-			}
+		if _, err := origin.Normalize(raw); err != nil {
+			return Config{}, fmt.Errorf("PEERIMETER_CORS_ALLOWED_ORIGINS contains an invalid origin: %w", err)
 		}
 	}
 	return cfg, nil

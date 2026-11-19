@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"embed"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
+	"github.com/peerimeter/peerimeter-service/internal/networking"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 	"gorm.io/datatypes"
@@ -403,12 +403,12 @@ func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapsho
 	})
 }
 
-func (s *Store) GetNetwork(id string) (json.RawMessage, error) {
+func (s *Store) GetNetwork(ctx context.Context, id string) (json.RawMessage, error) {
 	if !validID(id) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row networkRow
-	err := s.db.Where("id = ? AND config IS NOT NULL", id).First(&row).Error
+	err := s.db.WithContext(ctx).Where("id = ? AND config IS NOT NULL", id).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, configstore.ErrNotFound
 	}
@@ -417,12 +417,12 @@ func (s *Store) GetNetwork(id string) (json.RawMessage, error) {
 	}
 	return json.RawMessage(row.Config), nil
 }
-func (s *Store) GetNetworkMetadata(id string) (json.RawMessage, error) {
+func (s *Store) GetNetworkMetadata(ctx context.Context, id string) (json.RawMessage, error) {
 	if !validID(id) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row networkRow
-	err := s.db.Where("id = ? AND metadata IS NOT NULL", id).First(&row).Error
+	err := s.db.WithContext(ctx).Where("id = ? AND metadata IS NOT NULL", id).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, configstore.ErrNotFound
 	}
@@ -431,12 +431,12 @@ func (s *Store) GetNetworkMetadata(id string) (json.RawMessage, error) {
 	}
 	return json.RawMessage(row.Metadata), nil
 }
-func (s *Store) GetNode(networkID, nodeID string) (json.RawMessage, error) {
+func (s *Store) GetNode(ctx context.Context, networkID, nodeID string) (json.RawMessage, error) {
 	if !validID(networkID) || !validID(nodeID) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row nodeRow
-	err := s.db.Where("network_id = ? AND node_id = ?", networkID, nodeID).First(&row).Error
+	err := s.db.WithContext(ctx).Where("network_id = ? AND node_id = ?", networkID, nodeID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, configstore.ErrNotFound
 	}
@@ -445,16 +445,16 @@ func (s *Store) GetNode(networkID, nodeID string) (json.RawMessage, error) {
 	}
 	return json.RawMessage(row.Config), nil
 }
-func (s *Store) ListRegisteredNodes(networkID string) (map[string]json.RawMessage, error) {
+func (s *Store) ListRegisteredNodes(ctx context.Context, networkID string) (map[string]json.RawMessage, error) {
 	if !validID(networkID) {
 		return nil, configstore.ErrInvalidID
 	}
 	var rows []registrationRow
-	if err := s.db.Where("network_id = ?", networkID).Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("network_id = ?", networkID).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	var exists int64
-	if err := s.db.Model(&networkRow{}).Where("id = ?", networkID).Count(&exists).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(&networkRow{}).Where("id = ?", networkID).Count(&exists).Error; err != nil {
 		return nil, err
 	}
 	if exists == 0 {
@@ -466,9 +466,9 @@ func (s *Store) ListRegisteredNodes(networkID string) (map[string]json.RawMessag
 	}
 	return result, nil
 }
-func (s *Store) ListNetworks() (map[string]json.RawMessage, error) {
+func (s *Store) ListNetworks(ctx context.Context) (map[string]json.RawMessage, error) {
 	var rows []networkRow
-	if err := s.db.Where("metadata IS NOT NULL").Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("metadata IS NOT NULL").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make(map[string]json.RawMessage, len(rows))
@@ -609,38 +609,12 @@ func validID(value string) bool {
 	return true
 }
 func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
-	var data struct {
-		CIDR string `json:"cidr"`
-	}
-	if err := json.Unmarshal(value, &data); err != nil {
-		return netip.Prefix{}, err
-	}
-	prefix, err := netip.ParsePrefix(data.CIDR)
-	if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || prefix.Bits() < 8 || prefix.Bits() > 30 || !privateIPv4Prefix(prefix) {
+	prefix, err := networking.NetworkPrefix(value)
+	if err != nil {
 		return netip.Prefix{}, configstore.ErrInvalidNetwork
 	}
 	return prefix, nil
 }
-func privateIPv4Prefix(prefix netip.Prefix) bool {
-	for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
-		block, _ := netip.ParsePrefix(raw)
-		if block.Contains(prefix.Addr()) && prefix.Bits() >= block.Bits() {
-			return true
-		}
-	}
-	return false
-}
 func nextAddress(prefix netip.Prefix, used map[netip.Addr]bool) (netip.Addr, bool) {
-	base := prefix.Masked().Addr().As4()
-	first := binary.BigEndian.Uint32(base[:])
-	last := first | uint32((1<<(32-prefix.Bits()))-1)
-	for n := first + 1; n < last; n++ {
-		var raw [4]byte
-		binary.BigEndian.PutUint32(raw[:], n)
-		ip := netip.AddrFrom4(raw)
-		if !used[ip] {
-			return ip, true
-		}
-	}
-	return netip.Addr{}, false
+	return networking.NextAddress(prefix, used)
 }
