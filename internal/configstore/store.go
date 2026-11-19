@@ -86,14 +86,14 @@ type write struct {
 // process-local ordering and atomic single-file replacement, not multi-process
 // coordination.
 type Store struct {
-	path     string
-	queue    chan write
-	done     chan struct{}
-	closed   chan struct{}
-	mu       sync.RWMutex
-	state    fileState
-	close    sync.Once
-	submitMu sync.Mutex
+	path       string
+	queue      chan write
+	done       chan struct{}
+	closed     chan struct{}
+	mu         sync.RWMutex
+	state      fileState
+	close      sync.Once
+	submitGate chan struct{}
 }
 
 func Open(path string, queueSize int) (*Store, error) {
@@ -102,9 +102,10 @@ func Open(path string, queueSize int) (*Store, error) {
 	}
 	s := &Store{
 		path: path, queue: make(chan write, queueSize), done: make(chan struct{}),
-		closed: make(chan struct{}),
-		state:  fileState{Version: 1, Networks: make(map[string]network)},
+		closed: make(chan struct{}), submitGate: make(chan struct{}, 1),
+		state: fileState{Version: 1, Networks: make(map[string]network)},
 	}
+	s.submitGate <- struct{}{}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read config file: %w", err)
@@ -251,9 +252,9 @@ func (s *Store) migrateLegacyNodes() error {
 
 func (s *Store) Close() {
 	s.close.Do(func() {
-		s.submitMu.Lock()
+		<-s.submitGate
 		close(s.done)
-		s.submitMu.Unlock()
+		s.submitGate <- struct{}{}
 		<-s.closed
 	})
 }
@@ -390,20 +391,25 @@ func validID(value string) bool {
 }
 
 func (s *Store) submit(ctx context.Context, op write) error {
-	s.submitMu.Lock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.submitGate:
+	}
+	defer func() { s.submitGate <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-s.done:
-		s.submitMu.Unlock()
 		return os.ErrClosed
 	default:
 	}
 	select {
 	case <-ctx.Done():
-		s.submitMu.Unlock()
 		return ctx.Err()
 	case s.queue <- op:
 	}
-	s.submitMu.Unlock()
 	return <-op.result
 }
 

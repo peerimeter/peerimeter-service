@@ -146,7 +146,7 @@ func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func validPublicAPIURL(u *url.URL, requireHTTPS bool) bool {
-	if u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if u == nil || u.Host == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 	return u.Scheme == "https" || (!requireHTTPS && u.Scheme == "http")
