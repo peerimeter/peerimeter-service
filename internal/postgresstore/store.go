@@ -580,3 +580,25 @@ func (s *Store) PutNode(ctx context.Context, networkID, nodeID string, value jso
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "network_id"}, {Name: "node_id"}}, DoUpdates: clause.AssignmentColumns([]string{"config"})}).Create(&nodeRow{NetworkID: networkID, NodeID: nodeID, Config: datatypes.JSON(value)}).Error
 }
+
+func (s *Store) DeleteNode(ctx context.Context, networkID, nodeID string) error {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
+		return configstore.ErrInvalidID
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var registration registrationRow
+		registrationResult := tx.Where("network_id = ? AND node_id = ?", networkID, nodeID).Delete(&registration)
+		if registrationResult.Error != nil {
+			return registrationResult.Error
+		}
+		var node nodeRow
+		nodeResult := tx.Where("network_id = ? AND node_id = ?", networkID, nodeID).Delete(&node)
+		if nodeResult.Error != nil {
+			return nodeResult.Error
+		}
+		if registrationResult.RowsAffected == 0 && nodeResult.RowsAffected == 0 {
+			return configstore.ErrNotFound
+		}
+		return nil
+	})
+}

@@ -42,7 +42,7 @@ func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
 	if got := result.Header().Get("Access-Control-Allow-Origin"); got != "https://dashboard.example.test" {
 		t.Fatalf("allow-origin = %q", got)
 	}
-	if got := result.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, OPTIONS" {
+	if got := result.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 		t.Fatalf("allow-methods = %q", got)
 	}
 	if got := result.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type" {
@@ -55,6 +55,35 @@ func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
 	handler.ServeHTTP(getResult, get)
 	if getResult.Code != http.StatusOK || getResult.Header().Get("Access-Control-Allow-Origin") != "https://dashboard.example.test" {
 		t.Fatalf("allowed-origin GET = %d, headers %v", getResult.Code, getResult.Header())
+	}
+}
+
+func TestDeletePeerRequiresManagementKeyAndRemovesPeer(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-a/nodes/node-a/config", strings.NewReader(`{"version":1}`))
+	put.Header.Set("Authorization", "Bearer test-static-key")
+	putResult := httptest.NewRecorder()
+	handler.ServeHTTP(putResult, put)
+	if putResult.Code != http.StatusNoContent {
+		t.Fatalf("PUT peer config = %d %s", putResult.Code, putResult.Body)
+	}
+	deletePeer := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/networks/net-a/nodes/node-a", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		return res
+	}
+	if got := deletePeer("").Code; got != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated DELETE = %d, want 401", got)
+	}
+	if got := deletePeer("test-static-key").Code; got != http.StatusNoContent {
+		t.Fatalf("DELETE peer = %d", got)
+	}
+	if got := deletePeer("test-static-key").Code; got != http.StatusNotFound {
+		t.Fatalf("DELETE missing peer = %d, want 404", got)
 	}
 }
 
@@ -266,6 +295,16 @@ func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
 	duplicateKey := register("node-c", key(1))
 	if duplicateKey.Code != http.StatusConflict {
 		t.Fatalf("duplicate public key = %d %s", duplicateKey.Code, duplicateKey.Body)
+	}
+	deletePeer := httptest.NewRequest(http.MethodDelete, "/api/v1/networks/net-auto/nodes/node-a", nil)
+	deletePeer.Header.Set("Authorization", "Bearer test-static-key")
+	deleteResult := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResult, deletePeer)
+	if deleteResult.Code != http.StatusNoContent {
+		t.Fatalf("delete registered peer = %d %s", deleteResult.Code, deleteResult.Body)
+	}
+	if replacement := register("node-a", key(3)); replacement.Code != http.StatusOK {
+		t.Fatalf("register replacement key after delete = %d %s", replacement.Code, replacement.Body)
 	}
 	peers := httptest.NewRequest(http.MethodGet, "/api/v1/networks/net-auto/nodes/node-a/peers", nil)
 	peers.Header.Set("Authorization", "Bearer test-static-key")

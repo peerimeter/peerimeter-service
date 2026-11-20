@@ -37,6 +37,7 @@ const (
 	operationNode
 	operationCreateNetwork
 	operationRegisterNode
+	operationDeleteNode
 )
 
 type fileState struct {
@@ -355,6 +356,13 @@ func (s *Store) PutNode(ctx context.Context, networkID, nodeID string, value jso
 	return s.submit(ctx, write{kind: operationNode, networkID: networkID, nodeID: nodeID, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
 }
 
+func (s *Store) DeleteNode(ctx context.Context, networkID, nodeID string) error {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
+		return ErrInvalidID
+	}
+	return s.submit(ctx, write{kind: operationDeleteNode, networkID: networkID, nodeID: nodeID, result: make(chan error, 1)})
+}
+
 func (s *Store) submit(ctx context.Context, op write) error {
 	select {
 	case <-ctx.Done():
@@ -425,6 +433,12 @@ func (s *Store) apply(op write) error {
 			n.Nodes = make(map[string]json.RawMessage)
 		}
 		n.Nodes[op.nodeID] = append(json.RawMessage(nil), op.value...)
+	case operationDeleteNode:
+		if len(n.Registrations[op.nodeID]) == 0 && len(n.Nodes[op.nodeID]) == 0 {
+			return ErrNotFound
+		}
+		delete(n.Nodes, op.nodeID)
+		delete(n.Registrations, op.nodeID)
 	default:
 		return fmt.Errorf("unknown config write operation")
 	}
@@ -477,6 +491,8 @@ func (s *Store) persistOperation(op write, next fileState, current network) erro
 		committed, err = s.persistNode(op.networkID, op.nodeID, op.value)
 	case operationRegisterNode:
 		committed, err = s.persistRegistration(op.networkID, op.nodeID, current.Registrations[op.nodeID])
+	case operationDeleteNode:
+		committed, err = s.deleteNodeFiles(op.networkID, op.nodeID, next)
 	default:
 		committed, err = s.persist(next)
 	}
@@ -487,6 +503,86 @@ func (s *Store) persistOperation(op write, next fileState, current network) erro
 		return err
 	}
 	return nil
+}
+
+func (s *Store) deleteNodeFiles(networkID, nodeID string, next fileState) (bool, error) {
+	paths := []string{
+		filepath.Join(s.nodeDir(), networkID, nodeID+".yaml"),
+		filepath.Join(s.registrationDir(), networkID, nodeID+".yaml"),
+		filepath.Join(s.path+".registrations", networkID, nodeID+".yaml"),
+	}
+	staged := make([]stagedRemoval, 0, len(paths))
+	for _, path := range paths {
+		removal, err := stageRemoval(path)
+		if err != nil {
+			return false, errors.Join(fmt.Errorf("stage peer document removal: %w", err), restoreStagedRemovals(staged))
+		}
+		if removal.staged {
+			staged = append(staged, removal)
+		}
+	}
+	for remainingNetworkID, network := range next.Networks {
+		for remainingNodeID, registration := range network.Registrations {
+			if _, err := s.persistRegistration(remainingNetworkID, remainingNodeID, registration); err != nil {
+				return false, errors.Join(fmt.Errorf("persist remaining peer registration: %w", err), restoreStagedRemovals(staged))
+			}
+		}
+	}
+	committed, err := s.persist(next)
+	if err != nil {
+		if committed {
+			for _, removal := range staged {
+				_ = os.Remove(removal.backupPath)
+			}
+			return true, err
+		}
+		return committed, errors.Join(err, restoreStagedRemovals(staged))
+	}
+	for _, removal := range staged {
+		_ = os.Remove(removal.backupPath)
+	}
+	return true, nil
+}
+
+type stagedRemoval struct {
+	originalPath string
+	backupPath   string
+	staged       bool
+}
+
+func stageRemoval(path string) (stagedRemoval, error) {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return stagedRemoval{}, nil
+	} else if err != nil {
+		return stagedRemoval{}, err
+	}
+	placeholder, err := os.CreateTemp(filepath.Dir(path), ".peerimeter-delete-*.tmp")
+	if err != nil {
+		return stagedRemoval{}, err
+	}
+	backupPath := placeholder.Name()
+	if err := placeholder.Close(); err != nil {
+		_ = os.Remove(backupPath)
+		return stagedRemoval{}, err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return stagedRemoval{}, err
+	}
+	if err := os.Rename(path, backupPath); err != nil {
+		return stagedRemoval{}, err
+	}
+	return stagedRemoval{originalPath: path, backupPath: backupPath, staged: true}, nil
+}
+
+func restoreStagedRemovals(staged []stagedRemoval) error {
+	var rollbackErrors []error
+	for i := len(staged) - 1; i >= 0; i-- {
+		removal := staged[i]
+		if err := os.Rename(removal.backupPath, removal.originalPath); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore peer document: %w", err))
+		}
+	}
+	return errors.Join(rollbackErrors...)
 }
 
 func cloneNetwork(n network) network {

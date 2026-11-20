@@ -71,6 +71,26 @@ func (a *API) putNode(w http.ResponseWriter, r *http.Request) {
 	a.writePutResult(w, err)
 }
 
+func (a *API) deleteNode(w http.ResponseWriter, r *http.Request) {
+	networkID, nodeID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
+		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
+		return
+	}
+	if err := a.store.DeleteNode(r.Context(), networkID, nodeID); err != nil {
+		if errors.Is(err, configstore.ErrInvalidID) {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else if errors.Is(err, configstore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "peer not found")
+		} else {
+			a.logger.Error("delete peer", "error", err)
+			writeError(w, http.StatusInternalServerError, "could not delete peer")
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func readConfig(w http.ResponseWriter, r *http.Request) (json.RawMessage, error) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
 	if err != nil {
