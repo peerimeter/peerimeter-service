@@ -7,11 +7,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
+	"github.com/peerimeter/peerimeter-service/internal/networking"
 )
 
 func (a *API) listPeers(w http.ResponseWriter, r *http.Request) {
 	networkID, selfID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
-	if !validID(networkID) || !validID(selfID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(selfID) {
 		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
 		return
 	}
@@ -43,7 +44,7 @@ func (a *API) listPeersResponse(w http.ResponseWriter, r *http.Request, networkI
 
 func (a *API) listAllPeers(w http.ResponseWriter, r *http.Request) {
 	networkID := chi.URLParam(r, "networkID")
-	if !validID(networkID) {
+	if !networking.ValidID(networkID) {
 		writeError(w, http.StatusBadRequest, "networkID is invalid")
 		return
 	}

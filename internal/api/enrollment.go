@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -14,23 +13,26 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
+	"github.com/peerimeter/peerimeter-service/internal/networking"
 )
 
 func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
 	networkID, nodeID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
 		return
 	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
-	if err != nil {
-		a.writePutResult(w, err)
+	var registration nodeRegistration
+	if err := decodeStrictJSON(w, r, &registration); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			a.writePutResult(w, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "node registration is invalid")
 		return
 	}
-	var registration nodeRegistration
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&registration); err != nil || decoder.Decode(new(any)) != io.EOF || !validRegistration(registration) {
+	if !validRegistration(registration) {
 		writeError(w, http.StatusBadRequest, "node registration is invalid")
 		return
 	}
@@ -58,12 +60,27 @@ func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func validRegistration(registration nodeRegistration) bool {
-	key, err := base64.StdEncoding.Strict().DecodeString(registration.PublicKey)
-	if registration.Version != 1 || err != nil || len(key) != 32 || allZero(key) || registration.PublicKey != base64.StdEncoding.EncodeToString(key) || registration.ListenPort < 1 || registration.ListenPort > 65535 || strings.TrimSpace(registration.PrimaryInterface) == "" || len(registration.PrimaryInterface) > 64 || strings.ContainsAny(registration.PrimaryInterface, "\r\n\x00") || len(registration.LocalAddresses) == 0 || len(registration.LocalAddresses) > 16 {
+	if registration.Version != 1 || !validWireGuardKey(registration.PublicKey) || registration.ListenPort < 1 || registration.ListenPort > 65535 || !validPrimaryInterface(registration.PrimaryInterface) || !validLocalPrefixes(registration.LocalAddresses) || !validPublicEndpoint(registration.PublicEndpoint) {
+		return false
+	}
+	return true
+}
+
+func validWireGuardKey(raw string) bool {
+	key, err := base64.StdEncoding.Strict().DecodeString(raw)
+	return err == nil && len(key) == 32 && !allZero(key) && raw == base64.StdEncoding.EncodeToString(key)
+}
+
+func validPrimaryInterface(name string) bool {
+	return strings.TrimSpace(name) != "" && len(name) <= 64 && !strings.ContainsAny(name, "\r\n\x00")
+}
+
+func validLocalPrefixes(addresses []string) bool {
+	if len(addresses) == 0 || len(addresses) > 16 {
 		return false
 	}
 	var local []netip.Prefix
-	for _, raw := range registration.LocalAddresses {
+	for _, raw := range addresses {
 		prefix, err := netip.ParsePrefix(raw)
 		if err != nil || prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsLoopback() || prefix.Addr().IsMulticast() || prefix.Addr().IsUnspecified() || prefix.Addr().Is4In6() {
 			return false
@@ -75,13 +92,15 @@ func validRegistration(registration nodeRegistration) bool {
 		}
 		local = append(local, prefix)
 	}
-	if registration.PublicEndpoint != "" {
-		endpoint, err := netip.ParseAddrPort(registration.PublicEndpoint)
-		if err != nil || endpoint.Port() == 0 || (!endpoint.Addr().IsGlobalUnicast() && !endpoint.Addr().IsLoopback()) || endpoint.Addr().IsLinkLocalUnicast() || endpoint.Addr().Zone() != "" || endpoint.Addr().Is4In6() {
-			return false
-		}
-	}
 	return true
+}
+
+func validPublicEndpoint(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	endpoint, err := netip.ParseAddrPort(raw)
+	return err == nil && endpoint.Port() != 0 && (endpoint.Addr().IsGlobalUnicast() || endpoint.Addr().IsLoopback()) && !endpoint.Addr().IsLinkLocalUnicast() && endpoint.Addr().Zone() == "" && !endpoint.Addr().Is4In6()
 }
 
 func allZero(value []byte) bool {
@@ -111,7 +130,7 @@ func networkToken(key, networkID string) string {
 
 func (a *API) joinBundle(w http.ResponseWriter, r *http.Request) {
 	networkID := r.URL.Query().Get("network_id")
-	if !validID(networkID) {
+	if !networking.ValidID(networkID) {
 		writeError(w, http.StatusBadRequest, "network_id query parameter is required and must be valid")
 		return
 	}

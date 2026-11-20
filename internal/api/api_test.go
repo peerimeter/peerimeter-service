@@ -98,6 +98,33 @@ func TestHealthIsUnauthenticatedAndConfigIsProtected(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{name: "valid object", body: `{"name":"mesh"}`},
+		{name: "unknown field", body: `{"name":"mesh","other":true}`, wantError: true},
+		{name: "trailing value", body: `{"name":"mesh"} {}`, wantError: true},
+		{name: "malformed object", body: `{"name":`, wantError: true},
+		{name: "body exceeds limit", body: strings.Repeat(" ", maxConfigSize+1), wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			var destination struct {
+				Name string `json:"name"`
+			}
+			err := decodeStrictJSON(response, request, &destination)
+			if (err != nil) != test.wantError {
+				t.Fatalf("decodeStrictJSON() error = %v, wantError %v", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestNetworkAndNodeConfigRoundTrip(t *testing.T) {
 	handler := newTestAPI(t, "https://service.example")
 	for _, tc := range []struct {
@@ -253,6 +280,47 @@ func TestNodeRegistrationAllocatesUniqueAddressAndPersistsPeer(t *testing.T) {
 	handler.ServeHTTP(allPeersRes, allPeers)
 	if allPeersRes.Code != http.StatusOK || !strings.Contains(allPeersRes.Body.String(), `"node-a"`) || !strings.Contains(allPeersRes.Body.String(), `"node-b"`) {
 		t.Fatalf("all registered peers = %d %s", allPeersRes.Code, allPeersRes.Body)
+	}
+}
+
+func TestValidRegistration(t *testing.T) {
+	keyBytes := make([]byte, 32)
+	keyBytes[0] = 1
+	valid := nodeRegistration{
+		Version:          1,
+		PublicKey:        base64.StdEncoding.EncodeToString(keyBytes),
+		ListenPort:       51820,
+		PrimaryInterface: "eth0",
+		LocalAddresses:   []string{"192.168.1.12/24"},
+		PublicEndpoint:   "203.0.113.1:51820",
+	}
+	tests := []struct {
+		name         string
+		registration nodeRegistration
+		want         bool
+	}{
+		{name: "valid", registration: valid, want: true},
+		{name: "invalid version", registration: func() nodeRegistration { r := valid; r.Version = 2; return r }()},
+		{name: "empty key", registration: func() nodeRegistration {
+			r := valid
+			r.PublicKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+			return r
+		}()},
+		{name: "invalid interface", registration: func() nodeRegistration { r := valid; r.PrimaryInterface = "eth0\n"; return r }()},
+		{name: "duplicate local prefix", registration: func() nodeRegistration {
+			r := valid
+			r.LocalAddresses = []string{"192.168.1.12/24", "192.168.1.12/24"}
+			return r
+		}()},
+		{name: "invalid endpoint", registration: func() nodeRegistration { r := valid; r.PublicEndpoint = "10.0.0.1:0"; return r }()},
+		{name: "invalid listen port", registration: func() nodeRegistration { r := valid; r.ListenPort = 0; return r }()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validRegistration(test.registration); got != test.want {
+				t.Fatalf("validRegistration() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

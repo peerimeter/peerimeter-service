@@ -19,7 +19,7 @@ const configVersion = 1
 
 var errInvalidConfig = errors.New("configuration must be a JSON object with version 1")
 
-type configStore interface {
+type ConfigStore interface {
 	GetNetwork(context.Context, string) (json.RawMessage, error)
 	GetNetworkMetadata(context.Context, string) (json.RawMessage, error)
 	GetNode(context.Context, string, string) (json.RawMessage, error)
@@ -35,12 +35,12 @@ type API struct {
 	key            string
 	publicURL      string
 	requireHTTPS   bool
-	store          configStore
+	store          ConfigStore
 	logger         *slog.Logger
 	allowedOrigins map[string]bool
 }
 
-func New(key, publicURL string, store configStore, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
+func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
 	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool)}
 	for _, raw := range corsAllowedOrigins {
 		if normalized, err := corsorigin.Normalize(raw); err == nil {
@@ -88,18 +88,6 @@ func (a *API) readiness(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
-}
-
-func validID(value string) bool {
-	if value == "" || len(value) > 128 || value == "." || value == ".." {
-		return false
-	}
-	for _, r := range value {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

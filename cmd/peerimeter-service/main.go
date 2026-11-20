@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,17 +20,7 @@ import (
 	"github.com/peerimeter/peerimeter-service/internal/postgresstore"
 )
 
-type serviceStore interface {
-	GetNetwork(context.Context, string) (json.RawMessage, error)
-	GetNetworkMetadata(context.Context, string) (json.RawMessage, error)
-	GetNode(context.Context, string, string) (json.RawMessage, error)
-	ListRegisteredNodes(context.Context, string) (map[string]json.RawMessage, error)
-	ListNetworks(context.Context) (map[string]json.RawMessage, error)
-	CreateNetwork(context.Context, string, json.RawMessage) error
-	RegisterNode(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
-	PutNetwork(context.Context, string, json.RawMessage) error
-	PutNode(context.Context, string, string, json.RawMessage) error
-}
+const defaultFileStoreQueueSize = 128
 
 func runServer() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -94,7 +82,7 @@ func loadImportSnapshot(cfg config.Config, logger *slog.Logger) (configstore.Sna
 		if err := validateImportIndex(cfg.ImportFile, cfg.ImportSidecarOnly); err != nil {
 			return importSnapshot, fmt.Errorf("open file store for import %s: %w", filepath.Base(cfg.ImportFile), err)
 		}
-		legacy, err := configstore.Open(cfg.ImportFile, 128)
+		legacy, err := configstore.Open(cfg.ImportFile, defaultFileStoreQueueSize)
 		if err != nil {
 			return importSnapshot, fmt.Errorf("open file store for import: %w", err)
 		}
@@ -107,7 +95,7 @@ func loadImportSnapshot(cfg config.Config, logger *slog.Logger) (configstore.Sna
 	return importSnapshot, nil
 }
 
-func openStore(cfg config.Config, importSnapshot configstore.Snapshot, logger *slog.Logger) (serviceStore, func(), error) {
+func openStore(cfg config.Config, importSnapshot configstore.Snapshot, logger *slog.Logger) (api.ConfigStore, func(), error) {
 	if cfg.StorageBackend == "postgres" {
 		var db *postgresstore.Store
 		var err error
@@ -135,7 +123,7 @@ func openStore(cfg config.Config, importSnapshot configstore.Snapshot, logger *s
 		return db, func() { _ = db.Close() }, nil
 	}
 	if cfg.StorageBackend == "file" {
-		fileStore, err := configstore.Open(cfg.DataFile, 128)
+		fileStore, err := configstore.Open(cfg.DataFile, defaultFileStoreQueueSize)
 		if err != nil {
 			return nil, nil, fmt.Errorf("open configuration store: %w", err)
 		}
@@ -145,24 +133,13 @@ func openStore(cfg config.Config, importSnapshot configstore.Snapshot, logger *s
 }
 
 func migrateFromEnvironment() error {
-	if os.Getenv("PEERIMETER_STORAGE_BACKEND") != "postgres" {
-		return errors.New("PEERIMETER_STORAGE_BACKEND must be postgres for the migrate command")
+	cfg, err := config.LoadMigrate()
+	if err != nil {
+		return err
 	}
-	databaseURL := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_URL"))
-	if databaseURL == "" {
-		return errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
-	}
-	allowSSLModeRequire := false
-	if raw := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE")); raw != "" {
-		parsed, err := strconv.ParseBool(raw)
-		if err != nil {
-			return errors.New("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE must be a boolean")
-		}
-		allowSSLModeRequire = parsed
-	}
-	return postgresstore.Migrate(databaseURL, postgresstore.TLSOptions{
-		CACertPEM:           os.Getenv("PEERIMETER_DATABASE_CA_CERT"),
-		AllowSSLModeRequire: allowSSLModeRequire,
+	return postgresstore.Migrate(cfg.DatabaseURL, postgresstore.TLSOptions{
+		CACertPEM:           cfg.DatabaseCACert,
+		AllowSSLModeRequire: cfg.AllowSSLModeRequire,
 	})
 }
 
@@ -188,26 +165,31 @@ func validateImportIndex(indexPath string, sidecarOnly bool) error {
 		return errors.New("import index file cannot be accessed")
 	}
 	if sidecarOnly {
-		for _, segment := range strings.Split(filepath.ToSlash(indexPath), "/") {
-			if segment == ".." {
-				return errors.New("sidecar-only import path cannot contain '..' components")
-			}
+		if err := validateSidecarOnlyImport(indexPath); err != nil {
+			return err
+		}
+		if fileStoreHasSidecars(indexPath) {
+			return nil
+		}
+	}
+	return errors.New("import index file is missing; set PEERIMETER_IMPORT_SIDECAR_ONLY=true only when importing node or registration sidecars without an index file")
+}
+
+func validateSidecarOnlyImport(indexPath string) error {
+	for _, segment := range strings.Split(filepath.ToSlash(indexPath), "/") {
+		if segment == ".." {
+			return errors.New("sidecar-only import path cannot contain '..' components")
 		}
 	}
 	canonicalIndex := filepath.Join(filepath.Dir(indexPath), "config.json")
-	if sidecarOnly {
-		_, statErr := os.Lstat(canonicalIndex)
-		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-			return errors.New("config.json cannot be accessed; resolve it before enabling sidecar-only import")
-		}
-		if statErr == nil {
-			return errors.New("config.json exists; check PEERIMETER_IMPORT_FILE instead of enabling sidecar-only import")
-		}
+	_, err := os.Lstat(canonicalIndex)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("config.json cannot be accessed; resolve it before enabling sidecar-only import")
 	}
-	if sidecarOnly && fileStoreHasSidecars(indexPath) {
-		return nil
+	if err == nil {
+		return errors.New("config.json exists; check PEERIMETER_IMPORT_FILE instead of enabling sidecar-only import")
 	}
-	return errors.New("import index file is missing; set PEERIMETER_IMPORT_SIDECAR_ONLY=true only when importing node or registration sidecars without an index file")
+	return nil
 }
 
 func fileStoreHasSidecars(indexPath string) bool {
