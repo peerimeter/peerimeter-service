@@ -90,6 +90,178 @@ func TestGetMissingConfig(t *testing.T) {
 	}
 }
 
+func TestDeleteNodeRemovesConfigAndRegistrationFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(filepath.Join(root, "config.json"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateNetwork(ctx, "net-a", json.RawMessage(`{"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNode(ctx, "net-a", "node-a", json.RawMessage(`{"version":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RegisterNode(ctx, "net-a", "node-a", json.RawMessage(`{"public_key":"key"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNode(ctx, "net-a", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetNode(ctx, "net-a", "node-a"); err != ErrNotFound {
+		t.Fatalf("GetNode after delete = %v, want ErrNotFound", err)
+	}
+	if registrations, err := store.ListRegisteredNodes(ctx, "net-a"); err != nil || len(registrations) != 0 {
+		t.Fatalf("registrations after delete = %#v, err = %v", registrations, err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "nodes", "net-a", "node-a.yaml"),
+		filepath.Join(root, "registrations", "net-a", "node-a.yaml"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("peer file %s still exists or stat failed: %v", path, err)
+		}
+	}
+}
+
+func TestDeleteNodeDoesNotRestoreLegacyConfigAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	legacy := `{"version":1,"networks":{"net-a":{"nodes":{"node-a":{"version":1}}}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	store, err = Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.GetNode(context.Background(), "net-a", "node-a"); err != ErrNotFound {
+		t.Fatalf("GetNode after restart = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteNodeRestoresStagedFilesWhenLaterRemovalFails(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(filepath.Join(root, "config.json"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateNetwork(ctx, "net-a", json.RawMessage(`{"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutNode(ctx, "net-a", "node-a", json.RawMessage(`{"version":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RegisterNode(ctx, "net-a", "node-a", json.RawMessage(`{"public_key":"key"}`)); err != nil {
+		t.Fatal(err)
+	}
+	registrationDir := filepath.Join(root, "registrations", "net-a")
+	if err := os.Chmod(registrationDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNode(ctx, "net-a", "node-a"); err == nil {
+		t.Fatal("DeleteNode succeeded when registration directory was not writable")
+	}
+	if err := os.Chmod(registrationDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetNode(ctx, "net-a", "node-a"); err != nil {
+		t.Fatalf("node config was not restored after failed deletion: %v", err)
+	}
+	if registrations, err := store.ListRegisteredNodes(ctx, "net-a"); err != nil || len(registrations) != 1 {
+		t.Fatalf("registrations after failed deletion = %#v, err = %v", registrations, err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(root, "nodes", "net-a", "node-a.yaml"):         `"version": 1`,
+		filepath.Join(root, "registrations", "net-a", "node-a.yaml"): `"public_key": "key"`,
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Errorf("restored peer file %s = %q, err = %v, want to contain %q", path, data, err, want)
+		}
+	}
+	if err := store.DeleteNode(ctx, "net-a", "node-a"); err != nil {
+		t.Fatalf("retry DeleteNode: %v", err)
+	}
+	if registrations, err := store.ListRegisteredNodes(ctx, "net-a"); err != nil || len(registrations) != 0 {
+		t.Fatalf("registrations after retry = %#v, err = %v", registrations, err)
+	}
+}
+
+func TestDeleteNodePreservesEmbeddedRegistrationsAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	legacy := `{"version":1,"networks":{"net-a":{"registrations":{"node-a":{"public_key":"key-a"},"node-b":{"public_key":"key-b"}}}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	store, err = Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	registrations, err := store.ListRegisteredNodes(context.Background(), "net-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registrations) != 1 || string(registrations["node-b"]) == "" || strings.Contains(string(registrations["node-b"]), "key-a") {
+		t.Fatalf("registrations after restart = %#v, want only node-b", registrations)
+	}
+}
+
+func TestDeleteNodePreservesEmbeddedRegistrationsAcrossNetworks(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	legacy := `{"version":1,"networks":{"net-a":{"registrations":{"node-a":{"public_key":"key-a"}}},"net-b":{"registrations":{"node-b":{"public_key":"key-b"}}}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	store, err = Open(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	registrations, err := store.ListRegisteredNodes(context.Background(), "net-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registrations) != 1 || string(registrations["node-b"]) == "" || !strings.Contains(string(registrations["node-b"]), "key-b") {
+		t.Fatalf("net-b registrations after restart = %#v, want node-b", registrations)
+	}
+}
+
 func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 2)
 	if err != nil {

@@ -29,6 +29,7 @@ type ConfigStore interface {
 	ListNetworks(context.Context) (map[string]json.RawMessage, error)
 	CreateNetwork(ctx context.Context, id string, value json.RawMessage) error
 	RegisterNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) (json.RawMessage, error)
+	DeleteNode(context.Context, string, string) error
 	PutNetwork(ctx context.Context, id string, value json.RawMessage) error
 	PutNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) error
 }
@@ -67,6 +68,7 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 		r.Get("/api/v1/networks/{networkID}/nodes/{nodeID}/peers", a.listPeers)
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/registration", a.registerNode)
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.putNode)
+		r.With(a.authenticateManagement).Delete("/api/v1/networks/{networkID}/nodes/{nodeID}", a.deleteNode)
 	})
 	return r
 }
