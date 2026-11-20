@@ -21,7 +21,8 @@ type MigrateConfig struct {
 func LoadMigrate() (MigrateConfig, error) {
 	cfg, err := env.ParseAs[MigrateConfig]()
 	if err != nil {
-		if strings.Contains(err.Error(), "PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE") {
+		var parseErr env.ParseError
+		if errors.As(err, &parseErr) && parseErr.Name == "AllowSSLModeRequire" {
 			return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE must be a boolean")
 		}
 		return MigrateConfig{}, fmt.Errorf("parse migrate environment: %w", err)
