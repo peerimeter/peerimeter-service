@@ -247,7 +247,7 @@ func nextKeywordValue(remaining string) (key, value, rest string, ok bool) {
 				break
 			}
 		}
-		if end == len(remaining) {
+		if end >= len(remaining) {
 			return "", "", "", false
 		}
 		return key, unescapeKeywordValue(remaining[:end]), remaining[end+1:], true
