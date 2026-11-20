@@ -17,6 +17,8 @@ const maxConfigSize = 1 << 20
 
 const configVersion = 1
 
+var serviceVersion = "dev"
+
 var errInvalidConfig = errors.New("configuration must be a JSON object with version 1")
 
 type ConfigStore interface {
@@ -53,6 +55,7 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 	r.Get("/health", a.readiness)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
+		r.Get("/api/v1/version", a.getVersion)
 		r.Get("/api/v1/join-bundle", a.joinBundle)
 		r.Get("/api/v1/networks", a.listNetworks)
 		r.Post("/api/v1/networks", a.createNetwork)
@@ -66,6 +69,12 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 		r.Put("/api/v1/networks/{networkID}/nodes/{nodeID}/config", a.putNode)
 	})
 	return r
+}
+
+func (a *API) getVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, struct {
+		Version string `json:"version"`
+	}{Version: serviceVersion})
 }
 
 func (a *API) liveness(w http.ResponseWriter, _ *http.Request) {

@@ -269,6 +269,7 @@ token. Requests and responses use JSON. Config and registration documents use
 | --- | --- | --- |
 | `GET` | `/healthz` | Unauthenticated liveness check (`200` JSON `{"success":true}`); does not check dependencies. |
 | `GET` | `/health` | Unauthenticated readiness check (`200` JSON `{"success":true}` when file storage is configured or PostgreSQL is reachable; `503` JSON when PostgreSQL cannot be reached; the database error is logged by the service). |
+| `GET` | `/api/v1/version` | Return the running service release version. |
 | `GET` | `/api/v1/networks` | List managed network metadata. |
 | `POST` | `/api/v1/networks` | Create a managed network. |
 | `GET` | `/api/v1/networks/{networkID}` | Read network metadata. |
@@ -282,7 +283,8 @@ token. Requests and responses use JSON. Config and registration documents use
 `PUT` config requests accept any JSON object with `"version": 1`; the service
 stores and returns that document. Creating a network requires a canonical
 private IPv4 CIDR from `/8` through `/30`. The CIDR must not overlap another
-managed network.
+managed network. Agent registrations may include `agent_cli_version`; the
+service preserves it in registered peer documents for dashboard display.
 
 ### Usage examples
 

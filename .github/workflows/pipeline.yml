@@ -165,6 +165,7 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ env.VERSION_TAG }}
             ${{ env.IMAGE }}:${{ steps.image-tags.outputs.versionless }}
+          build-args: SERVICE_VERSION=${{ env.VERSION_TAG }}
       - name: Create version tag and GitHub release
         run: |
           if EXISTING_TAG="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION_TAG" --jq .object.sha 2>/dev/null)"; then

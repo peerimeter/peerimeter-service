@@ -60,7 +60,7 @@ func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func validRegistration(registration nodeRegistration) bool {
-	if registration.Version != 1 || !validWireGuardKey(registration.PublicKey) || registration.ListenPort < 1 || registration.ListenPort > 65535 || !validPrimaryInterface(registration.PrimaryInterface) || !validLocalPrefixes(registration.LocalAddresses) || !validPublicEndpoint(registration.PublicEndpoint) {
+	if registration.Version != 1 || len(registration.AgentCLIVersion) > 64 || strings.ContainsAny(registration.AgentCLIVersion, "\r\n\x00") || !validWireGuardKey(registration.PublicKey) || registration.ListenPort < 1 || registration.ListenPort > 65535 || !validPrimaryInterface(registration.PrimaryInterface) || !validLocalPrefixes(registration.LocalAddresses) || !validPublicEndpoint(registration.PublicEndpoint) {
 		return false
 	}
 	return true
@@ -114,6 +114,7 @@ func allZero(value []byte) bool {
 
 type nodeRegistration struct {
 	Version          int      `json:"version"`
+	AgentCLIVersion  string   `json:"agent_cli_version,omitempty"`
 	PublicKey        string   `json:"public_key"`
 	ListenPort       int      `json:"listen_port"`
 	PrimaryInterface string   `json:"primary_interface"`
