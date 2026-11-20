@@ -52,7 +52,7 @@ func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body must contain version, id, name and cidr")
 		return
 	}
-	if request.Version != 1 || !networking.ValidID(request.ID) || strings.TrimSpace(request.Name) == "" || len(request.Name) > 128 || strings.ContainsAny(request.Name, "\r\n\x00") {
+	if !validNetworkRequest(request) {
 		writeError(w, http.StatusBadRequest, "network version, id or name is invalid")
 		return
 	}
@@ -78,4 +78,10 @@ func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+func validNetworkRequest(request networkRequest) bool {
+	validName := strings.TrimSpace(request.Name) != "" && len(request.Name) <= 128 &&
+		!strings.ContainsAny(request.Name, "\r\n\x00")
+	return request.Version == 1 && networking.ValidID(request.ID) && validName
 }

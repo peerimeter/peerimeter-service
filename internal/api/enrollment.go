@@ -60,10 +60,18 @@ func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func validRegistration(registration nodeRegistration) bool {
-	if registration.Version != 1 || len(registration.AgentCLIVersion) > 64 || strings.ContainsAny(registration.AgentCLIVersion, "\r\n\x00") || !validWireGuardKey(registration.PublicKey) || registration.ListenPort < 1 || registration.ListenPort > 65535 || !validPrimaryInterface(registration.PrimaryInterface) || !validLocalPrefixes(registration.LocalAddresses) || !validPublicEndpoint(registration.PublicEndpoint) {
-		return false
-	}
-	return true
+	return registration.Version == 1 && validAgentCLIVersion(registration.AgentCLIVersion) &&
+		validWireGuardKey(registration.PublicKey) && validListenPort(registration.ListenPort) &&
+		validPrimaryInterface(registration.PrimaryInterface) && validLocalPrefixes(registration.LocalAddresses) &&
+		validPublicEndpoint(registration.PublicEndpoint)
+}
+
+func validAgentCLIVersion(version string) bool {
+	return len(version) <= 64 && !strings.ContainsAny(version, "\r\n\x00")
+}
+
+func validListenPort(port int) bool {
+	return port >= 1 && port <= 65535
 }
 
 func validWireGuardKey(raw string) bool {
@@ -82,7 +90,7 @@ func validLocalPrefixes(addresses []string) bool {
 	var local []netip.Prefix
 	for _, raw := range addresses {
 		prefix, err := netip.ParsePrefix(raw)
-		if err != nil || prefix.Bits() == 0 || !prefix.Addr().IsGlobalUnicast() || prefix.Addr().IsLinkLocalUnicast() || prefix.Addr().IsLoopback() || prefix.Addr().IsMulticast() || prefix.Addr().IsUnspecified() || prefix.Addr().Is4In6() {
+		if err != nil || !validUnicastPrefix(prefix) {
 			return false
 		}
 		for _, previous := range local {
@@ -93,6 +101,12 @@ func validLocalPrefixes(addresses []string) bool {
 		local = append(local, prefix)
 	}
 	return true
+}
+
+func validUnicastPrefix(prefix netip.Prefix) bool {
+	address := prefix.Addr()
+	return prefix.Bits() != 0 && address.IsGlobalUnicast() && !address.IsLinkLocalUnicast() &&
+		!address.IsLoopback() && !address.IsMulticast() && !address.IsUnspecified() && !address.Is4In6()
 }
 
 func validPublicEndpoint(raw string) bool {
