@@ -1,12 +1,46 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/peerimeter/peerimeter-service/internal/origin"
 )
+
+// MigrateConfig contains the environment settings used by the migrate command.
+type MigrateConfig struct {
+	DatabaseURL         string
+	DatabaseCACert      string
+	AllowSSLModeRequire bool
+}
+
+// LoadMigrate reads and validates the settings required by the migrate command.
+func LoadMigrate() (MigrateConfig, error) {
+	if os.Getenv("PEERIMETER_STORAGE_BACKEND") != "postgres" {
+		return MigrateConfig{}, errors.New("PEERIMETER_STORAGE_BACKEND must be postgres for the migrate command")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_URL"))
+	if databaseURL == "" {
+		return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
+	}
+	allowSSLModeRequire := false
+	if raw := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE must be a boolean")
+		}
+		allowSSLModeRequire = parsed
+	}
+	return MigrateConfig{
+		DatabaseURL:         databaseURL,
+		DatabaseCACert:      os.Getenv("PEERIMETER_DATABASE_CA_CERT"),
+		AllowSSLModeRequire: allowSSLModeRequire,
+	}, nil
+}
 
 // Config contains the service settings loaded from environment variables.
 type Config struct {

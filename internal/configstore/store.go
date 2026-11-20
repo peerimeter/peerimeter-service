@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -133,98 +132,75 @@ func Open(path string, queueSize int) (*Store, error) {
 }
 
 func (s *Store) loadNodeFiles() error {
-	root := s.nodeDir()
-	networks, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
+	return loadYAMLDocuments(s.nodeDir(), "node config", func(networkID, nodeID string, value json.RawMessage) error {
+		network := s.state.Networks[networkID]
+		if network.Nodes == nil {
+			network.Nodes = make(map[string]json.RawMessage)
+		}
+		network.Nodes[nodeID] = value
+		s.state.Networks[networkID] = network
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read node config directory: %w", err)
-	}
-	for _, networkEntry := range networks {
-		if !networkEntry.IsDir() {
-			continue
-		}
-		networkID := networkEntry.Name()
-		if !validID(networkID) {
-			return fmt.Errorf("invalid network ID in node config directory")
-		}
-		entries, err := os.ReadDir(filepath.Join(root, networkID))
-		if err != nil {
-			return fmt.Errorf("read node config directory: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-				continue
-			}
-			nodeID := entry.Name()[:len(entry.Name())-len(".yaml")]
-			if !validID(nodeID) {
-				return fmt.Errorf("invalid node ID in node config directory")
-			}
-			data, err := os.ReadFile(filepath.Join(root, networkID, entry.Name()))
-			if err != nil {
-				return fmt.Errorf("read node config: %w", err)
-			}
-			value, err := yamlDocumentToJSON(data)
-			if err != nil {
-				return fmt.Errorf("encode node config: %w", err)
-			}
-			network := s.state.Networks[networkID]
-			if network.Nodes == nil {
-				network.Nodes = make(map[string]json.RawMessage)
-			}
-			network.Nodes[nodeID] = value
-			s.state.Networks[networkID] = network
-		}
-	}
-	return nil
+	})
 }
 
 func (s *Store) loadRegistrationFiles() error {
 	// Load old files first, then overlay the current directory so new files win
 	// even if a previous write created only part of the current directory.
 	for _, root := range []string{s.path + ".registrations", s.registrationDir()} {
-		networks, err := os.ReadDir(root)
-		if errors.Is(err, os.ErrNotExist) {
+		if err := loadYAMLDocuments(root, "node registration", func(networkID, nodeID string, value json.RawMessage) error {
+			network := s.state.Networks[networkID]
+			if network.Registrations == nil {
+				network.Registrations = make(map[string]json.RawMessage)
+			}
+			network.Registrations[nodeID] = value
+			s.state.Networks[networkID] = network
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadYAMLDocuments(root, label string, visit func(networkID, nodeID string, document json.RawMessage) error) error {
+	networks, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s directory: %w", label, err)
+	}
+	for _, networkEntry := range networks {
+		if !networkEntry.IsDir() {
 			continue
 		}
-		if err != nil {
-			return fmt.Errorf("read node registration directory: %w", err)
+		networkID := networkEntry.Name()
+		if !networking.ValidID(networkID) {
+			return fmt.Errorf("invalid network ID in %s directory", label)
 		}
-		for _, networkEntry := range networks {
-			if !networkEntry.IsDir() {
+		entries, err := os.ReadDir(filepath.Join(root, networkID))
+		if err != nil {
+			return fmt.Errorf("read %s directory: %w", label, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
 				continue
 			}
-			networkID := networkEntry.Name()
-			if !validID(networkID) {
-				return fmt.Errorf("invalid network ID in registration directory")
+			nodeID := entry.Name()[:len(entry.Name())-len(".yaml")]
+			if !networking.ValidID(nodeID) {
+				return fmt.Errorf("invalid node ID in %s directory", label)
 			}
-			entries, err := os.ReadDir(filepath.Join(root, networkID))
+			path := filepath.Join(root, networkID, entry.Name())
+			data, err := os.ReadFile(path)
 			if err != nil {
-				return fmt.Errorf("read node registration directory: %w", err)
+				return fmt.Errorf("read %s: %w", label, err)
 			}
-			for _, entry := range entries {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-					continue
-				}
-				nodeID := entry.Name()[:len(entry.Name())-len(".yaml")]
-				if !validID(nodeID) {
-					return fmt.Errorf("invalid node ID in registration directory")
-				}
-				data, err := os.ReadFile(filepath.Join(root, networkID, entry.Name()))
-				if err != nil {
-					return fmt.Errorf("read node registration: %w", err)
-				}
-				value, err := yamlDocumentToJSON(data)
-				if err != nil {
-					return fmt.Errorf("encode node registration: %w", err)
-				}
-				network := s.state.Networks[networkID]
-				if network.Registrations == nil {
-					network.Registrations = make(map[string]json.RawMessage)
-				}
-				network.Registrations[nodeID] = value
-				s.state.Networks[networkID] = network
+			document, err := yamlDocumentToJSON(data)
+			if err != nil {
+				return fmt.Errorf("encode %s: %w", label, err)
+			}
+			if err := visit(networkID, nodeID, document); err != nil {
+				return err
 			}
 		}
 	}
@@ -234,7 +210,7 @@ func (s *Store) loadRegistrationFiles() error {
 func (s *Store) migrateLegacyNodes() error {
 	for networkID, network := range s.state.Networks {
 		for nodeID, value := range network.Nodes {
-			if !validID(networkID) || !validID(nodeID) {
+			if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 				return fmt.Errorf("invalid network or node ID in legacy configuration")
 			}
 			path := filepath.Join(s.nodeDir(), networkID, nodeID+".yaml")
@@ -261,7 +237,7 @@ func (s *Store) Close() {
 }
 
 func (s *Store) GetNetwork(_ context.Context, id string) (json.RawMessage, error) {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return nil, ErrInvalidID
 	}
 	s.mu.RLock()
@@ -274,7 +250,7 @@ func (s *Store) GetNetwork(_ context.Context, id string) (json.RawMessage, error
 }
 
 func (s *Store) GetNetworkMetadata(_ context.Context, id string) (json.RawMessage, error) {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return nil, ErrInvalidID
 	}
 	s.mu.RLock()
@@ -287,7 +263,7 @@ func (s *Store) GetNetworkMetadata(_ context.Context, id string) (json.RawMessag
 }
 
 func (s *Store) GetNode(_ context.Context, networkID, nodeID string) (json.RawMessage, error) {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return nil, ErrInvalidID
 	}
 	s.mu.RLock()
@@ -304,7 +280,7 @@ func (s *Store) GetNode(_ context.Context, networkID, nodeID string) (json.RawMe
 }
 
 func (s *Store) ListRegisteredNodes(_ context.Context, networkID string) (map[string]json.RawMessage, error) {
-	if !validID(networkID) {
+	if !networking.ValidID(networkID) {
 		return nil, ErrInvalidID
 	}
 	s.mu.RLock()
@@ -345,7 +321,7 @@ func (s *Store) Snapshot() Snapshot {
 }
 
 func (s *Store) CreateNetwork(ctx context.Context, id string, value json.RawMessage) error {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return ErrInvalidID
 	}
 	return s.submit(ctx, write{kind: operationCreateNetwork, networkID: id, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
@@ -354,7 +330,7 @@ func (s *Store) CreateNetwork(ctx context.Context, id string, value json.RawMess
 // RegisterNode atomically allocates a tunnel address and persists the node
 // document so concurrent registrations cannot receive the same address.
 func (s *Store) RegisterNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) (json.RawMessage, error) {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return nil, ErrInvalidID
 	}
 	response := make(chan json.RawMessage, 1)
@@ -366,29 +342,17 @@ func (s *Store) RegisterNode(ctx context.Context, networkID, nodeID string, valu
 }
 
 func (s *Store) PutNetwork(ctx context.Context, id string, value json.RawMessage) error {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return ErrInvalidID
 	}
 	return s.submit(ctx, write{kind: operationNetwork, networkID: id, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
 }
 
 func (s *Store) PutNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) error {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return ErrInvalidID
 	}
 	return s.submit(ctx, write{kind: operationNode, networkID: networkID, nodeID: nodeID, value: append(json.RawMessage(nil), value...), result: make(chan error, 1)})
-}
-
-func validID(value string) bool {
-	if len(value) == 0 || len(value) > 128 || value == "." || value == ".." {
-		return false
-	}
-	for _, r := range value {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Store) submit(ctx context.Context, op write) error {
@@ -441,57 +405,79 @@ func (s *Store) apply(op write) error {
 		next.Networks[id] = cloneNetwork(n)
 	}
 	n := next.Networks[op.networkID]
-	if op.kind == operationCreateNetwork {
-		if len(n.Metadata) != 0 {
-			return ErrExists
-		}
-		prefix, err := networkPrefix(op.value)
-		if err != nil {
-			return ErrInvalidNetwork
-		}
-		for id, network := range s.state.Networks {
-			if id == op.networkID || len(network.Metadata) == 0 {
-				continue
-			}
-			previous, err := networkPrefix(network.Metadata)
-			if err == nil && prefix.Overlaps(previous) {
-				return ErrCIDROverlap
-			}
-		}
-	}
-	if op.kind == operationNetwork {
+	switch op.kind {
+	case operationNetwork:
 		n.Config = append(json.RawMessage(nil), op.value...)
-	} else if op.kind == operationCreateNetwork {
-		n.Metadata = append(json.RawMessage(nil), op.value...)
-	} else if op.kind == operationRegisterNode {
-		if len(n.Metadata) == 0 {
-			return ErrNotFound
-		}
-		if n.Registrations == nil {
-			n.Registrations = make(map[string]json.RawMessage)
-		}
-		registered, err := registerNodeDocument(n, op.value, op.nodeID)
+	case operationCreateNetwork:
+		var err error
+		n, err = s.applyCreateNetwork(op, n)
 		if err != nil {
 			return err
 		}
-		n.Registrations[op.nodeID] = registered
-		op.response <- append(json.RawMessage(nil), registered...)
-	} else if op.kind == operationNode {
+	case operationRegisterNode:
+		var err error
+		n, err = applyRegisterNode(n, op)
+		if err != nil {
+			return err
+		}
+	case operationNode:
 		if n.Nodes == nil {
 			n.Nodes = make(map[string]json.RawMessage)
 		}
 		n.Nodes[op.nodeID] = append(json.RawMessage(nil), op.value...)
-	} else {
+	default:
 		return fmt.Errorf("unknown config write operation")
 	}
 	next.Networks[op.networkID] = n
+	return s.persistOperation(op, next, n)
+}
+
+func (s *Store) applyCreateNetwork(op write, current network) (network, error) {
+	if len(current.Metadata) != 0 {
+		return network{}, ErrExists
+	}
+	prefix, err := networking.NetworkPrefix(op.value)
+	if err != nil {
+		return network{}, ErrInvalidNetwork
+	}
+	metadata := make([]json.RawMessage, 0, len(s.state.Networks))
+	for id, existing := range s.state.Networks {
+		if id != op.networkID && len(existing.Metadata) != 0 {
+			metadata = append(metadata, existing.Metadata)
+		}
+	}
+	if networking.HasOverlappingNetwork(prefix, metadata) {
+		return network{}, ErrCIDROverlap
+	}
+	current.Metadata = append(json.RawMessage(nil), op.value...)
+	return current, nil
+}
+
+func applyRegisterNode(current network, op write) (network, error) {
+	if len(current.Metadata) == 0 {
+		return network{}, ErrNotFound
+	}
+	if current.Registrations == nil {
+		current.Registrations = make(map[string]json.RawMessage)
+	}
+	registered, err := registerNodeDocument(current, op.value, op.nodeID)
+	if err != nil {
+		return network{}, err
+	}
+	current.Registrations[op.nodeID] = registered
+	op.response <- append(json.RawMessage(nil), registered...)
+	return current, nil
+}
+
+func (s *Store) persistOperation(op write, next fileState, current network) error {
 	var committed bool
 	var err error
-	if op.kind == operationNode {
+	switch op.kind {
+	case operationNode:
 		committed, err = s.persistNode(op.networkID, op.nodeID, op.value)
-	} else if op.kind == operationRegisterNode {
-		committed, err = s.persistRegistration(op.networkID, op.nodeID, n.Registrations[op.nodeID])
-	} else {
+	case operationRegisterNode:
+		committed, err = s.persistRegistration(op.networkID, op.nodeID, current.Registrations[op.nodeID])
+	default:
 		committed, err = s.persist(next)
 	}
 	if committed {
@@ -501,14 +487,6 @@ func (s *Store) apply(op write) error {
 		return err
 	}
 	return nil
-}
-
-func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
-	prefix, err := networking.NetworkPrefix(value)
-	if err != nil {
-		return netip.Prefix{}, ErrInvalidNetwork
-	}
-	return prefix, nil
 }
 
 func cloneNetwork(n network) network {
@@ -540,42 +518,7 @@ func (s *Store) persist(state fileState) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("encode config file: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
-		return false, fmt.Errorf("create config directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".peerimeter-config-*.tmp")
-	if err != nil {
-		return false, fmt.Errorf("create config temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("protect config temp file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("write config temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("sync config temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("close config temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		return false, fmt.Errorf("replace config file: %w", err)
-	}
-	dir, err := os.Open(filepath.Dir(s.path))
-	if err == nil {
-		err = dir.Sync()
-		_ = dir.Close()
-	}
-	if err != nil {
-		return true, fmt.Errorf("sync config directory: %w", err)
-	}
-	return true, nil
+	return writeFileAtomically(s.path, ".peerimeter-config-*.tmp", "config temp file", data)
 }
 
 func (s *Store) persistNode(networkID, nodeID string, value json.RawMessage) (bool, error) {
@@ -603,41 +546,52 @@ func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessag
 	if err != nil {
 		return false, fmt.Errorf("encode node YAML: %w", err)
 	}
-	dir := filepath.Join(root, networkID)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return false, fmt.Errorf("create node config directory: %w", err)
+	targetPath := filepath.Join(root, networkID, nodeID+".yaml")
+	return writeFileAtomically(targetPath, ".peerimeter-node-*.tmp", "node config", data)
+}
+
+func writeFileAtomically(targetPath, tempPattern, label string, data []byte) (bool, error) {
+	directory := filepath.Dir(targetPath)
+	directoryLabel := label
+	tempFileLabel := label + " temp file"
+	if label == "config temp file" {
+		directoryLabel = "config"
+		tempFileLabel = label
 	}
-	tmp, err := os.CreateTemp(dir, ".peerimeter-node-*.tmp")
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		return false, fmt.Errorf("create %s directory: %w", directoryLabel, err)
+	}
+	tmp, err := os.CreateTemp(directory, tempPattern)
 	if err != nil {
-		return false, fmt.Errorf("create node config temp file: %w", err)
+		return false, fmt.Errorf("create %s: %w", tempFileLabel, err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("protect node config temp file: %w", err)
+		_ = tmp.Close()
+		return false, fmt.Errorf("protect %s: %w", tempFileLabel, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("write node config: %w", err)
+		_ = tmp.Close()
+		return false, fmt.Errorf("write %s: %w", label, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return false, fmt.Errorf("sync node config: %w", err)
+		_ = tmp.Close()
+		return false, fmt.Errorf("sync %s: %w", label, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("close node config: %w", err)
+		return false, fmt.Errorf("close %s: %w", label, err)
 	}
-	if err := os.Rename(tmpName, filepath.Join(dir, nodeID+".yaml")); err != nil {
-		return false, fmt.Errorf("replace node config: %w", err)
+	if err := os.Rename(tmpName, targetPath); err != nil {
+		return false, fmt.Errorf("replace %s: %w", label, err)
 	}
-	directory, err := os.Open(dir)
+	dir, err := os.Open(directory)
 	if err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
+		err = dir.Sync()
+		_ = dir.Close()
 	}
 	if err != nil {
-		return true, fmt.Errorf("sync node config directory: %w", err)
+		return true, fmt.Errorf("sync %s directory: %w", directoryLabel, err)
 	}
 	return true, nil
 }

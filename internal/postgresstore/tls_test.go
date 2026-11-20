@@ -2,6 +2,29 @@ package postgresstore
 
 import "testing"
 
+func TestDatabaseURLSSLMode(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "URL query", url: "postgres://db/test?sslmode=require", want: "require"},
+		{name: "keyword format", url: "host=db sslmode=verify-full user=peerimeter", want: "verify-full"},
+		{name: "quoted keyword value", url: "host='db server' sslmode='verify-full'", want: "verify-full"},
+		{name: "escaped quote", url: "host='db\\'server' sslmode=require", want: "require"},
+		{name: "missing equals", url: "host=db sslmode"},
+		{name: "unterminated quote", url: "host=db sslmode='require"},
+		{name: "trailing escape", url: "host=db sslmode=require\\"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := databaseURLSSLMode(test.url); got != test.want {
+				t.Fatalf("databaseURLSSLMode(%q) = %q, want %q", test.url, got, test.want)
+			}
+		})
+	}
+}
+
 func TestValidateTLSMode(t *testing.T) {
 	tests := []struct {
 		name string

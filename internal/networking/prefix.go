@@ -5,6 +5,19 @@ import (
 	"net/netip"
 )
 
+// ValidID reports whether value is a safe network or node identifier.
+func ValidID(value string) bool {
+	if len(value) == 0 || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // NetworkPrefix validates and returns the canonical private IPv4 pool.
 func NetworkPrefix(value json.RawMessage) (netip.Prefix, error) {
 	var metadata struct {
@@ -18,6 +31,18 @@ func NetworkPrefix(value json.RawMessage) (netip.Prefix, error) {
 		return netip.Prefix{}, errInvalidPrefix
 	}
 	return prefix, nil
+}
+
+// HasOverlappingNetwork reports whether candidate overlaps any valid metadata prefix.
+// Invalid existing metadata is ignored, matching the stores' legacy behavior.
+func HasOverlappingNetwork(candidate netip.Prefix, metadata []json.RawMessage) bool {
+	for _, value := range metadata {
+		previous, err := NetworkPrefix(value)
+		if err == nil && candidate.Overlaps(previous) {
+			return true
+		}
+	}
+	return false
 }
 
 var errInvalidPrefix = &invalidPrefixError{}

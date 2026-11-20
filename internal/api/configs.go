@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,11 +9,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
+	"github.com/peerimeter/peerimeter-service/internal/networking"
 )
 
 func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {
 	networkID := chi.URLParam(r, "networkID")
-	if !validID(networkID) {
+	if !networking.ValidID(networkID) {
 		writeError(w, http.StatusBadRequest, "networkID is invalid")
 		return
 	}
@@ -22,7 +24,7 @@ func (a *API) getNetwork(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
 	networkID, nodeID := chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID")
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
 		return
 	}
@@ -46,11 +48,11 @@ func (a *API) writeConfig(w http.ResponseWriter, value json.RawMessage, err erro
 }
 
 func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
-	if !validID(chi.URLParam(r, "networkID")) {
+	if !networking.ValidID(chi.URLParam(r, "networkID")) {
 		writeError(w, http.StatusBadRequest, "networkID is invalid")
 		return
 	}
-	value, err := readConfig(r)
+	value, err := readConfig(w, r)
 	if err == nil {
 		err = a.store.PutNetwork(r.Context(), chi.URLParam(r, "networkID"), value)
 	}
@@ -58,19 +60,19 @@ func (a *API) putNetwork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) putNode(w http.ResponseWriter, r *http.Request) {
-	if !validID(chi.URLParam(r, "networkID")) || !validID(chi.URLParam(r, "nodeID")) {
+	if !networking.ValidID(chi.URLParam(r, "networkID")) || !networking.ValidID(chi.URLParam(r, "nodeID")) {
 		writeError(w, http.StatusBadRequest, "networkID and nodeID are invalid")
 		return
 	}
-	value, err := readConfig(r)
+	value, err := readConfig(w, r)
 	if err == nil {
 		err = a.store.PutNode(r.Context(), chi.URLParam(r, "networkID"), chi.URLParam(r, "nodeID"), value)
 	}
 	a.writePutResult(w, err)
 }
 
-func readConfig(r *http.Request) (json.RawMessage, error) {
-	data, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxConfigSize))
+func readConfig(w http.ResponseWriter, r *http.Request) (json.RawMessage, error) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +85,25 @@ func readConfig(r *http.Request) (json.RawMessage, error) {
 		return nil, errInvalidConfig
 	}
 	return json.RawMessage(data), nil
+}
+
+func decodeStrictJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxConfigSize))
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *API) writePutResult(w http.ResponseWriter, err error) {

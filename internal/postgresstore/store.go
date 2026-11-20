@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"log"
 	"net"
-	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -34,6 +33,8 @@ import (
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
+
+const advisoryLockKey int64 = 0x70656572696d6574
 
 type Store struct{ db *gorm.DB }
 
@@ -215,55 +216,63 @@ func databaseURLSSLMode(databaseURL string) string {
 	}
 	sslmode := ""
 	for remaining := databaseURL; len(remaining) > 0; {
-		eqIndex := strings.IndexByte(remaining, '=')
-		if eqIndex < 0 {
+		key, value, rest, ok := nextKeywordValue(remaining)
+		if !ok {
 			return ""
-		}
-		key := strings.Trim(remaining[:eqIndex], " \t\n\r\v\f")
-		remaining = strings.TrimLeft(remaining[eqIndex+1:], " \t\n\r\v\f")
-		value := ""
-		if len(remaining) > 0 && remaining[0] == '\'' {
-			remaining = remaining[1:]
-			end := 0
-			for ; end < len(remaining); end++ {
-				if remaining[end] == '\\' {
-					end++
-					continue
-				}
-				if remaining[end] == '\'' {
-					break
-				}
-			}
-			if end == len(remaining) {
-				return ""
-			}
-			value = strings.ReplaceAll(strings.ReplaceAll(remaining[:end], "\\\\", "\\"), "\\'", "'")
-			remaining = remaining[end+1:]
-		} else {
-			end := 0
-			for ; end < len(remaining); end++ {
-				if strings.ContainsRune(" \t\n\r\v\f", rune(remaining[end])) {
-					break
-				}
-				if remaining[end] == '\\' {
-					end++
-					if end == len(remaining) {
-						return ""
-					}
-				}
-			}
-			value = strings.ReplaceAll(strings.ReplaceAll(remaining[:end], "\\\\", "\\"), "\\'", "'")
-			if end == len(remaining) {
-				remaining = ""
-			} else {
-				remaining = remaining[end+1:]
-			}
 		}
 		if key == "sslmode" {
 			sslmode = value
 		}
+		remaining = rest
 	}
 	return sslmode
+}
+
+func nextKeywordValue(remaining string) (key, value, rest string, ok bool) {
+	eqIndex := strings.IndexByte(remaining, '=')
+	if eqIndex < 0 {
+		return "", "", "", false
+	}
+	key = strings.Trim(remaining[:eqIndex], " \t\n\r\v\f")
+	remaining = strings.TrimLeft(remaining[eqIndex+1:], " \t\n\r\v\f")
+	if len(remaining) > 0 && remaining[0] == '\'' {
+		remaining = remaining[1:]
+		end := 0
+		for ; end < len(remaining); end++ {
+			if remaining[end] == '\\' {
+				end++
+				continue
+			}
+			if remaining[end] == '\'' {
+				break
+			}
+		}
+		if end == len(remaining) {
+			return "", "", "", false
+		}
+		return key, unescapeKeywordValue(remaining[:end]), remaining[end+1:], true
+	}
+	end := 0
+	for ; end < len(remaining); end++ {
+		if strings.ContainsRune(" \t\n\r\v\f", rune(remaining[end])) {
+			break
+		}
+		if remaining[end] == '\\' {
+			end++
+			if end == len(remaining) {
+				return "", "", "", false
+			}
+		}
+	}
+	value = unescapeKeywordValue(remaining[:end])
+	if end < len(remaining) {
+		end++
+	}
+	return key, value, remaining[end:], true
+}
+
+func unescapeKeywordValue(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "\\\\", "\\"), "\\'", "'")
 }
 
 func appendDatabaseCACert(config *pgconn.Config, certPEM string) error {
@@ -362,7 +371,7 @@ func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapsho
 		return errors.New("file store import source is empty")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x70656572696d6574)).Error; err != nil {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", advisoryLockKey).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec("LOCK TABLE nodes, registrations, networks IN EXCLUSIVE MODE").Error; err != nil {
@@ -405,7 +414,7 @@ func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapsho
 }
 
 func (s *Store) GetNetwork(ctx context.Context, id string) (json.RawMessage, error) {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row networkRow
@@ -419,7 +428,7 @@ func (s *Store) GetNetwork(ctx context.Context, id string) (json.RawMessage, err
 	return json.RawMessage(row.Config), nil
 }
 func (s *Store) GetNetworkMetadata(ctx context.Context, id string) (json.RawMessage, error) {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row networkRow
@@ -433,7 +442,7 @@ func (s *Store) GetNetworkMetadata(ctx context.Context, id string) (json.RawMess
 	return json.RawMessage(row.Metadata), nil
 }
 func (s *Store) GetNode(ctx context.Context, networkID, nodeID string) (json.RawMessage, error) {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return nil, configstore.ErrInvalidID
 	}
 	var row nodeRow
@@ -447,7 +456,7 @@ func (s *Store) GetNode(ctx context.Context, networkID, nodeID string) (json.Raw
 	return json.RawMessage(row.Config), nil
 }
 func (s *Store) ListRegisteredNodes(ctx context.Context, networkID string) (map[string]json.RawMessage, error) {
-	if !validID(networkID) {
+	if !networking.ValidID(networkID) {
 		return nil, configstore.ErrInvalidID
 	}
 	var rows []registrationRow
@@ -479,35 +488,36 @@ func (s *Store) ListNetworks(ctx context.Context) (map[string]json.RawMessage, e
 	return result, nil
 }
 func (s *Store) CreateNetwork(ctx context.Context, id string, value json.RawMessage) error {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return configstore.ErrInvalidID
 	}
-	prefix, err := networkPrefix(value)
+	prefix, err := networking.NetworkPrefix(value)
 	if err != nil {
 		return configstore.ErrInvalidNetwork
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x70656572696d6574)).Error; err != nil {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", advisoryLockKey).Error; err != nil {
 			return err
 		}
 		var rows []networkRow
 		if err := tx.Where("metadata IS NOT NULL").Find(&rows).Error; err != nil {
 			return err
 		}
+		metadata := make([]json.RawMessage, 0, len(rows))
 		for _, row := range rows {
 			if row.ID == id && len(row.Metadata) != 0 {
 				return configstore.ErrExists
 			}
-			previous, err := networkPrefix(json.RawMessage(row.Metadata))
-			if err == nil && prefix.Overlaps(previous) {
-				return configstore.ErrCIDROverlap
-			}
+			metadata = append(metadata, json.RawMessage(row.Metadata))
+		}
+		if networking.HasOverlappingNetwork(prefix, metadata) {
+			return configstore.ErrCIDROverlap
 		}
 		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"metadata": datatypes.JSON(value)})}).Create(&networkRow{ID: id, Metadata: datatypes.JSON(value)}).Error
 	})
 }
 func (s *Store) RegisterNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) (json.RawMessage, error) {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return nil, configstore.ErrInvalidID
 	}
 	var output json.RawMessage
@@ -545,33 +555,14 @@ func (s *Store) RegisterNode(ctx context.Context, networkID, nodeID string, valu
 	return output, err
 }
 func (s *Store) PutNetwork(ctx context.Context, id string, value json.RawMessage) error {
-	if !validID(id) {
+	if !networking.ValidID(id) {
 		return configstore.ErrInvalidID
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.Assignments(map[string]any{"config": datatypes.JSON(value)})}).Create(&networkRow{ID: id, Config: datatypes.JSON(value)}).Error
 }
 func (s *Store) PutNode(ctx context.Context, networkID, nodeID string, value json.RawMessage) error {
-	if !validID(networkID) || !validID(nodeID) {
+	if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
 		return configstore.ErrInvalidID
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "network_id"}, {Name: "node_id"}}, DoUpdates: clause.AssignmentColumns([]string{"config"})}).Create(&nodeRow{NetworkID: networkID, NodeID: nodeID, Config: datatypes.JSON(value)}).Error
-}
-
-func validID(value string) bool {
-	if len(value) == 0 || len(value) > 128 || value == "." || value == ".." {
-		return false
-	}
-	for _, r := range value {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
-			return false
-		}
-	}
-	return true
-}
-func networkPrefix(value json.RawMessage) (netip.Prefix, error) {
-	prefix, err := networking.NetworkPrefix(value)
-	if err != nil {
-		return netip.Prefix{}, configstore.ErrInvalidNetwork
-	}
-	return prefix, nil
 }
