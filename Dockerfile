@@ -2,6 +2,7 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG SERVICE_VERSION=dev
 
 WORKDIR /src
 RUN apk add --no-cache ca-certificates
@@ -12,7 +13,7 @@ COPY internal ./internal
 RUN mkdir -p /out /var/lib/peerimeter && chown 1000:1000 /var/lib/peerimeter
 RUN printf 'app:x:1000:1000:Peerimeter Service:/var/lib/peerimeter:/sbin/nologin\n' > /out/passwd \
     && printf 'app:x:1000:\n' > /out/group
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' -o /out/peerimeter-service ./cmd/peerimeter-service
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/peerimeter/peerimeter-service/internal/api.serviceVersion=$SERVICE_VERSION" -o /out/peerimeter-service ./cmd/peerimeter-service
 
 FROM scratch
 
