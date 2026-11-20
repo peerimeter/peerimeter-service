@@ -40,15 +40,16 @@ func (a *API) cors(next http.Handler) http.Handler {
 
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		masterOK := a.key != "" && len(provided) == len(a.key) && subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) == 1
-		networkID := chi.URLParam(r, "networkID")
-		if networkID == "" && r.URL.Path == "/api/v1/join-bundle" {
-			networkID = r.URL.Query().Get("network_id")
+		provided, ok := bearerToken(r)
+		if !ok || a.key == "" {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
 		}
+		masterOK := constantTimeEqual(provided, a.key)
+		networkID := requestNetworkID(r)
 		token := networkToken(a.key, networkID)
-		networkOK := networkID != "" && len(provided) == len(token) && subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1
-		if a.key == "" || provided == r.Header.Get("Authorization") || (!masterOK && !networkOK) {
+		networkOK := networkID != "" && constantTimeEqual(provided, token)
+		if !masterOK && !networkOK {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -58,12 +59,30 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 
 func (a *API) authenticateManagement(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		managementOK := a.key != "" && len(provided) == len(a.key) && subtle.ConstantTimeCompare([]byte(provided), []byte(a.key)) == 1
-		if !managementOK || provided == r.Header.Get("Authorization") {
+		provided, ok := bearerToken(r)
+		if !ok || a.key == "" || !constantTimeEqual(provided, a.key) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return token, ok && token != ""
+}
+
+func constantTimeEqual(provided, expected string) bool {
+	return expected != "" && len(provided) == len(expected) && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
+}
+
+func requestNetworkID(r *http.Request) string {
+	if networkID := chi.URLParam(r, "networkID"); networkID != "" {
+		return networkID
+	}
+	if r.URL.Path == "/api/v1/join-bundle" {
+		return r.URL.Query().Get("network_id")
+	}
+	return ""
 }

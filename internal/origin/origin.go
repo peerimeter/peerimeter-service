@@ -19,7 +19,7 @@ func Normalize(raw string) (string, error) {
 		return "", errors.New("invalid CORS origin")
 	}
 	scheme := strings.ToLower(u.Scheme)
-	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || strings.HasSuffix(u.Host, ":") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(value, "#") || u.Opaque != "" || value == "null" || strings.Contains(value, "*") {
+	if hasDisallowedURLComponents(u, value, scheme) {
 		return "", errors.New("invalid CORS origin")
 	}
 	host := strings.ToLower(u.Hostname())
@@ -56,4 +56,14 @@ func Normalize(raw string) (string, error) {
 		host = "[" + host + "]"
 	}
 	return scheme + "://" + host, nil
+}
+
+func hasDisallowedURLComponents(u *url.URL, raw, scheme string) bool {
+	invalidScheme := scheme != "http" && scheme != "https"
+	invalidHost := u.Hostname() == "" || strings.HasSuffix(u.Host, ":")
+	containsPath := u.Path != "" && u.Path != "/"
+	containsQuery := u.RawQuery != "" || u.ForceQuery
+	containsFragment := u.Fragment != "" || strings.Contains(raw, "#")
+	containsWildcard := strings.Contains(raw, "*")
+	return invalidScheme || invalidHost || u.User != nil || containsPath || containsQuery || containsFragment || u.Opaque != "" || raw == "null" || containsWildcard
 }

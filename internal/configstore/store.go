@@ -518,7 +518,9 @@ func (s *Store) persist(state fileState) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("encode config file: %w", err)
 	}
-	return writeFileAtomically(s.path, ".peerimeter-config-*.tmp", "config temp file", data)
+	return writeFileAtomically(s.path, ".peerimeter-config-*.tmp", atomicWriteLabels{
+		directory: "config", tempFile: "config temp file", operation: "config temp file",
+	}, data)
 }
 
 func (s *Store) persistNode(networkID, nodeID string, value json.RawMessage) (bool, error) {
@@ -547,43 +549,45 @@ func (s *Store) persistYAML(root, networkID, nodeID string, value json.RawMessag
 		return false, fmt.Errorf("encode node YAML: %w", err)
 	}
 	targetPath := filepath.Join(root, networkID, nodeID+".yaml")
-	return writeFileAtomically(targetPath, ".peerimeter-node-*.tmp", "node config", data)
+	return writeFileAtomically(targetPath, ".peerimeter-node-*.tmp", atomicWriteLabels{
+		directory: "node config", tempFile: "node config temp file", operation: "node config",
+	}, data)
 }
 
-func writeFileAtomically(targetPath, tempPattern, label string, data []byte) (bool, error) {
+type atomicWriteLabels struct {
+	directory string
+	tempFile  string
+	operation string
+}
+
+func writeFileAtomically(targetPath, tempPattern string, labels atomicWriteLabels, data []byte) (bool, error) {
 	directory := filepath.Dir(targetPath)
-	directoryLabel := label
-	tempFileLabel := label + " temp file"
-	if label == "config temp file" {
-		directoryLabel = "config"
-		tempFileLabel = label
-	}
 	if err := os.MkdirAll(directory, 0o750); err != nil {
-		return false, fmt.Errorf("create %s directory: %w", directoryLabel, err)
+		return false, fmt.Errorf("create %s directory: %w", labels.directory, err)
 	}
 	tmp, err := os.CreateTemp(directory, tempPattern)
 	if err != nil {
-		return false, fmt.Errorf("create %s: %w", tempFileLabel, err)
+		return false, fmt.Errorf("create %s: %w", labels.tempFile, err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return false, fmt.Errorf("protect %s: %w", tempFileLabel, err)
+		return false, fmt.Errorf("protect %s: %w", labels.tempFile, err)
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return false, fmt.Errorf("write %s: %w", label, err)
+		return false, fmt.Errorf("write %s: %w", labels.operation, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return false, fmt.Errorf("sync %s: %w", label, err)
+		return false, fmt.Errorf("sync %s: %w", labels.operation, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("close %s: %w", label, err)
+		return false, fmt.Errorf("close %s: %w", labels.operation, err)
 	}
 	if err := os.Rename(tmpName, targetPath); err != nil {
-		return false, fmt.Errorf("replace %s: %w", label, err)
+		return false, fmt.Errorf("replace %s: %w", labels.operation, err)
 	}
 	dir, err := os.Open(directory)
 	if err == nil {
@@ -591,7 +595,7 @@ func writeFileAtomically(targetPath, tempPattern, label string, data []byte) (bo
 		_ = dir.Close()
 	}
 	if err != nil {
-		return true, fmt.Errorf("sync %s directory: %w", directoryLabel, err)
+		return true, fmt.Errorf("sync %s directory: %w", labels.directory, err)
 	}
 	return true, nil
 }

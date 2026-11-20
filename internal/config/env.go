@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
@@ -13,33 +12,29 @@ import (
 
 // MigrateConfig contains the environment settings used by the migrate command.
 type MigrateConfig struct {
-	DatabaseURL         string
-	DatabaseCACert      string
-	AllowSSLModeRequire bool
+	StorageBackend      string `env:"PEERIMETER_STORAGE_BACKEND"`
+	DatabaseURL         string `env:"PEERIMETER_DATABASE_URL"`
+	DatabaseCACert      string `env:"PEERIMETER_DATABASE_CA_CERT"`
+	AllowSSLModeRequire bool   `env:"PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE" envDefault:"false"`
 }
 
 // LoadMigrate reads and validates the settings required by the migrate command.
 func LoadMigrate() (MigrateConfig, error) {
-	if os.Getenv("PEERIMETER_STORAGE_BACKEND") != "postgres" {
-		return MigrateConfig{}, errors.New("PEERIMETER_STORAGE_BACKEND must be postgres for the migrate command")
-	}
-	databaseURL := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_URL"))
-	if databaseURL == "" {
-		return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
-	}
-	allowSSLModeRequire := false
-	if raw := strings.TrimSpace(os.Getenv("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE")); raw != "" {
-		parsed, err := strconv.ParseBool(raw)
-		if err != nil {
+	cfg, err := env.ParseAs[MigrateConfig]()
+	if err != nil {
+		if strings.Contains(err.Error(), "PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE") {
 			return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE must be a boolean")
 		}
-		allowSSLModeRequire = parsed
+		return MigrateConfig{}, fmt.Errorf("parse migrate environment: %w", err)
 	}
-	return MigrateConfig{
-		DatabaseURL:         databaseURL,
-		DatabaseCACert:      os.Getenv("PEERIMETER_DATABASE_CA_CERT"),
-		AllowSSLModeRequire: allowSSLModeRequire,
-	}, nil
+	if cfg.StorageBackend != "postgres" {
+		return MigrateConfig{}, errors.New("PEERIMETER_STORAGE_BACKEND must be postgres for the migrate command")
+	}
+	cfg.DatabaseURL = strings.TrimSpace(cfg.DatabaseURL)
+	if cfg.DatabaseURL == "" {
+		return MigrateConfig{}, errors.New("PEERIMETER_DATABASE_URL must be set for the migrate command")
+	}
+	return cfg, nil
 }
 
 // Config contains the service settings loaded from environment variables.

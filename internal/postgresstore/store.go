@@ -377,40 +377,54 @@ func (s *Store) ImportSnapshot(ctx context.Context, snapshot configstore.Snapsho
 		if err := tx.Exec("LOCK TABLE nodes, registrations, networks IN EXCLUSIVE MODE").Error; err != nil {
 			return err
 		}
-		for _, model := range []any{&networkRow{}, &nodeRow{}, &registrationRow{}} {
-			var count int64
-			if err := tx.Model(model).Count(&count).Error; err != nil {
-				return err
-			}
-			if count != 0 {
-				return errors.New("PostgreSQL import requires an empty database")
-			}
+		if err := requireEmptyTables(tx); err != nil {
+			return err
 		}
 		for id, network := range snapshot.Networks {
-			row := networkRow{ID: id, Metadata: datatypes.JSON(network.Metadata), Config: datatypes.JSON(network.Config)}
-			if err := tx.Create(&row).Error; err != nil {
-				return fmt.Errorf("import network %q: %w", id, err)
-			}
-			for nodeID, value := range network.Nodes {
-				if err := tx.Create(&nodeRow{NetworkID: id, NodeID: nodeID, Config: datatypes.JSON(value)}).Error; err != nil {
-					return fmt.Errorf("import node %q/%q: %w", id, nodeID, err)
-				}
-			}
-			for nodeID, value := range network.Registrations {
-				var document struct {
-					PublicKey string `json:"public_key"`
-				}
-				if err := json.Unmarshal(value, &document); err != nil || strings.TrimSpace(document.PublicKey) == "" {
-					return fmt.Errorf("import registration %q/%q: invalid public key", id, nodeID)
-				}
-				row := registrationRow{NetworkID: id, NodeID: nodeID, PublicKey: document.PublicKey, Document: datatypes.JSON(value)}
-				if err := tx.Create(&row).Error; err != nil {
-					return fmt.Errorf("import registration %q/%q: %w", id, nodeID, err)
-				}
+			if err := importNetworkRecords(tx, id, network); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+}
+
+func requireEmptyTables(tx *gorm.DB) error {
+	for _, model := range []any{&networkRow{}, &nodeRow{}, &registrationRow{}} {
+		var count int64
+		if err := tx.Model(model).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 0 {
+			return errors.New("PostgreSQL import requires an empty database")
+		}
+	}
+	return nil
+}
+
+func importNetworkRecords(tx *gorm.DB, id string, network configstore.SnapshotNetwork) error {
+	row := networkRow{ID: id, Metadata: datatypes.JSON(network.Metadata), Config: datatypes.JSON(network.Config)}
+	if err := tx.Create(&row).Error; err != nil {
+		return fmt.Errorf("import network %q: %w", id, err)
+	}
+	for nodeID, value := range network.Nodes {
+		if err := tx.Create(&nodeRow{NetworkID: id, NodeID: nodeID, Config: datatypes.JSON(value)}).Error; err != nil {
+			return fmt.Errorf("import node %q/%q: %w", id, nodeID, err)
+		}
+	}
+	for nodeID, value := range network.Registrations {
+		var document struct {
+			PublicKey string `json:"public_key"`
+		}
+		if err := json.Unmarshal(value, &document); err != nil || strings.TrimSpace(document.PublicKey) == "" {
+			return fmt.Errorf("import registration %q/%q: invalid public key", id, nodeID)
+		}
+		row := registrationRow{NetworkID: id, NodeID: nodeID, PublicKey: document.PublicKey, Document: datatypes.JSON(value)}
+		if err := tx.Create(&row).Error; err != nil {
+			return fmt.Errorf("import registration %q/%q: %w", id, nodeID, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) GetNetwork(ctx context.Context, id string) (json.RawMessage, error) {
