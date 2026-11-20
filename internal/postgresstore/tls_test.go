@@ -14,6 +14,7 @@ func TestDatabaseURLSSLMode(t *testing.T) {
 		{name: "escaped quote", url: "host='db\\'server' sslmode=require", want: "require"},
 		{name: "missing equals", url: "host=db sslmode"},
 		{name: "unterminated quote", url: "host=db sslmode='require"},
+		{name: "quoted trailing escape", url: "host=db sslmode='require\\"},
 		{name: "trailing escape", url: "host=db sslmode=require\\"},
 	}
 	for _, test := range tests {
