@@ -112,8 +112,9 @@ jobs:
     needs: [seed-version]
     runs-on: ubuntu-24.04
     outputs:
-      tag: ${{ steps.semver.outputs.next }}
-      bump: ${{ steps.semver.outputs.bump }}
+      tag: ${{ steps.release_version.outputs.next }}
+      bump: ${{ steps.release_version.outputs.bump }}
+      breaking: ${{ steps.release_version.outputs.breaking }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -128,6 +129,22 @@ jobs:
           fallbackTag: v0.0.0
           noNewCommitBehavior: current
           noVersionBumpBehavior: current
+      - id: release_version
+        name: Keep breaking changes on the next 0.x minor release
+        env:
+          CURRENT: ${{ steps.semver.outputs.current }}
+          NEXT: ${{ steps.semver.outputs.next }}
+          BUMP: ${{ steps.semver.outputs.bump }}
+        run: |
+          if [[ "$CURRENT" =~ ^v0\.([0-9]+)\.[0-9]+$ && "$BUMP" == major ]]; then
+            echo "next=v0.$((BASH_REMATCH[1] + 1)).0" >> "$GITHUB_OUTPUT"
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+            echo "breaking=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+            echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+            echo "breaking=false" >> "$GITHUB_OUTPUT"
+          fi
 
   release-image:
     if: github.ref == 'refs/heads/main' && (needs.version.outputs.bump == 'major' || needs.version.outputs.bump == 'minor' || needs.version.outputs.bump == 'patch')
@@ -141,6 +158,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       IMAGE: ghcr.io/${{ github.repository }}
       VERSION_TAG: ${{ needs.version.outputs.tag }}
+      BREAKING_RELEASE: ${{ needs.version.outputs.breaking }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -175,7 +193,13 @@ jobs:
               -f ref="refs/tags/$VERSION_TAG" -f sha="$GITHUB_SHA"
           fi
           if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
-            gh release create "$VERSION_TAG" --verify-tag --generate-notes --title "$VERSION_TAG"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$VERSION_TAG" --jq .body > release-notes.md
+            if [[ "$BREAKING_RELEASE" == true ]]; then
+              { printf '## Breaking changes included\n\nThis release includes backward-incompatible changes. Review the compatibility changes and required operator actions below before upgrading.\n\n'; cat release-notes.md; } > release-notes-with-warning.md
+              mv release-notes-with-warning.md release-notes.md
+            fi
+            gh release create "$VERSION_TAG" --verify-tag --notes-file release-notes.md --title "$VERSION_TAG"
           fi
       - name: Promote latest image tag only for the newest release
         run: |
