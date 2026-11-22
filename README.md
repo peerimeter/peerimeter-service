@@ -418,4 +418,7 @@ The service image is published as
 `ghcr.io/peerimeter/peerimeter-service` for `linux/amd64` and `linux/arm64`.
 Pull requests build but do not publish images. Main branch releases publish
 versioned tags (`vX.Y.Z` and `X.Y.Z`) when Conventional Commit history requires
-a release.
+a release. While the service remains in `0.y.z`, breaking changes use the next
+minor version; their GitHub release description starts with **Breaking changes
+included** and summarizes the compatibility changes and required operator
+actions.
