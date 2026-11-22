@@ -196,7 +196,7 @@ jobs:
             gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
               -f tag_name="$VERSION_TAG" --jq .body > release-notes.md
             if [[ "$BREAKING_RELEASE" == true ]]; then
-              { printf '## Breaking changes included\n\nThis release includes backward-incompatible changes. Review the compatibility changes and required operator actions below before upgrading.\n\n'; cat release-notes.md; } > release-notes-with-warning.md
+              { printf '## Breaking changes included\n\nThis release includes backward-incompatible changes. Review the linked pull requests for compatibility details and upgrade instructions.\n\n'; cat release-notes.md; } > release-notes-with-warning.md
               mv release-notes-with-warning.md release-notes.md
             fi
             gh release create "$VERSION_TAG" --verify-tag --notes-file release-notes.md --title "$VERSION_TAG"
