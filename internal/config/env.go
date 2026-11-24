@@ -45,8 +45,6 @@ type Config struct {
 	DatabaseCACert              string `env:"PEERIMETER_DATABASE_CA_CERT"`
 	DatabaseAllowSSLModeRequire bool   `env:"PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE" envDefault:"false"`
 	AutoMigrate                 bool   `env:"PEERIMETER_AUTO_MIGRATE" envDefault:"true"`
-	ImportFile                  string `env:"PEERIMETER_IMPORT_FILE"`
-	ImportSidecarOnly           bool   `env:"PEERIMETER_IMPORT_SIDECAR_ONLY"`
 	DataFile                    string `env:"PEERIMETER_DATA_FILE" envDefault:"/var/lib/peerimeter/config.json"`
 	ListenAddr                  string `env:"PEERIMETER_LISTEN_ADDR" envDefault:"127.0.0.1"`
 	PublicAPIURL                string `env:"PEERIMETER_PUBLIC_API_URL"`
@@ -73,9 +71,7 @@ func Load() (Config, error) {
 	if cfg.StorageBackend != "postgres" && (cfg.DatabaseCACert != "" || cfg.DatabaseAllowSSLModeRequire) {
 		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_CA_CERT and PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE require PEERIMETER_STORAGE_BACKEND=postgres")
 	}
-	if cfg.ImportSidecarOnly && (cfg.StorageBackend != "postgres" || strings.TrimSpace(cfg.ImportFile) == "") {
-		return Config{}, fmt.Errorf("PEERIMETER_IMPORT_SIDECAR_ONLY requires PostgreSQL storage and PEERIMETER_IMPORT_FILE")
-	}
+
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		if strings.TrimSpace(raw) == "" {
 			continue

@@ -144,8 +144,7 @@ to read the CA file; `:ro` prevents writes but does not grant read access.
 ### Back up your data
 
 For file storage, back up the whole `data/` directory. It contains
-`config.json`, adjacent `nodes/` and `registrations/` directories, and the
-legacy `config.json.registrations/` directory if present. Stop all file-backed
+`config.json`, and adjacent `nodes/` and `registrations/` directories. Stop all file-backed
 writers before copying the directory, or use a filesystem-consistent snapshot
 of the whole directory; the service does not coordinate multi-file backups.
 
@@ -222,40 +221,13 @@ so it cannot affect later Compose commands:
 Use the mounted container path in `.env` for the service. The host-side
 certificate path is not available inside the container.
 
-### Import an existing file store
+### Storage backend changes
 
-1. Stop all file-backed processes that can write to the store. The importer
-   reads a snapshot and does not coordinate with active writers.
-2. Copy the source store into the Compose `data/` directory. The source setup
-   defaults to `$HOME/.local/share/peerimeter`. Include `config.json` when
-   present, the sibling `nodes/` and `registrations/` directories, and the
-   legacy `config.json.registrations/` directory if it exists. Skip this step
-   if the store is already in `data/`.
-3. Make the copied files readable by container UID/GID `1000:1000` or the
-   mapped host IDs for rootless or remapped Docker.
-4. In `.env`, set `PEERIMETER_STORAGE_BACKEND=postgres` and
-   `PEERIMETER_IMPORT_FILE=/var/lib/peerimeter/config.json`. This is the path
-   inside the container; host-relative paths are not visible there.
-5. For a sidecar-only store without `config.json`, also set
-   `PEERIMETER_IMPORT_SIDECAR_ONLY=true`. This option is accepted only when
-   node or registration sidecar files exist.
-6. Start the service while the import settings are still in `.env`:
-   `docker compose up -d peerimeter-service`. The importer copies network
-   metadata, network config, node configs, and registrations in one transaction,
-   and requires empty PostgreSQL tables. It warns if file data exists without
-   an import path.
-7. Check `docker compose logs peerimeter-service` for the successful import
-   message (`imported file store into empty PostgreSQL database`). Keep the
-   original files until the import succeeds, then remove both import settings
-   from `.env`.
-8. Recreate the container with `docker compose up -d peerimeter-service`. A
-   restart alone does not apply `.env` changes.
-9. Verify the imported data and back up the database before deleting the
-   original files.
+The service no longer imports file-backed data into PostgreSQL. Keep using the
+file backend for existing file stores, or migrate data with an operator-managed
+export/import process before switching backends. Back up both the index and its
+sidecar directories before changing storage.
 
-The index file must exist and be a regular file unless you are importing a
-sidecar-only store. This prevents a typo in its path from silently importing
-incomplete data.
 
 ## API
 
@@ -394,9 +366,7 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`, unless `PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE=true`; local development can use `sslmode=disable`. |
 | `PEERIMETER_DATABASE_CA_CERT` | Empty | Optional PEM CA certificate added to the system trust store for PostgreSQL TLS verification. |
 | `PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE` | `false` | Explicitly allow `sslmode=require`, which encrypts the connection but does not verify the server certificate. Does not allow remote `sslmode=disable`. |
-| `PEERIMETER_IMPORT_FILE` | Empty | Optional one-time import source path; Compose uses `/var/lib/peerimeter/config.json`. Import requires an empty PostgreSQL database and includes sibling `nodes/` and `registrations/` data. |
-| `PEERIMETER_IMPORT_SIDECAR_ONLY` | `false` | Explicitly allow import when the `config.json` index is absent but node or registration sidecars exist. |
-| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path and optional PostgreSQL import source. Sibling `nodes/` and `registrations/` directories are included. |
+| `PEERIMETER_DATA_FILE` | `/var/lib/peerimeter/config.json` | File-backend path. Sibling `nodes/` and `registrations/` directories are included. |
 | `POSTGRES_USER` | `peerimeter` in Compose | User for the bundled PostgreSQL service. |
 | `POSTGRES_PASSWORD` | Local-only Compose fallback | Set a unique high-entropy password for deployment. |
 | `POSTGRES_DB` | `peerimeter` in Compose | Database created for the bundled PostgreSQL service. |

@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/peerimeter/peerimeter-service/internal/configstore"
 )
 
 func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
@@ -24,32 +22,6 @@ func TestPostgresPersistenceAndConcurrentRegistration(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	networkID := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	ctx := context.Background()
-	importID := "import-" + networkID
-	snapshot := configstore.Snapshot{Networks: map[string]configstore.SnapshotNetwork{
-		importID: {
-			Metadata:      json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Imported","cidr":"10.251.0.0/24"}`, importID)),
-			Config:        json.RawMessage(`{"version":1,"name":"imported-config"}`),
-			Nodes:         map[string]json.RawMessage{"imported-node": json.RawMessage(`{"version":1,"name":"imported-node"}`)},
-			Registrations: map[string]json.RawMessage{"imported-node": json.RawMessage(`{"public_key":"imported-key","tunnel_address":"10.251.0.1"}`)},
-		},
-	}}
-	if err := store.ImportSnapshot(ctx, snapshot); err != nil {
-		t.Fatalf("import file snapshot: %v", err)
-	}
-	t.Cleanup(func() { store.db.Exec("DELETE FROM networks WHERE id = ?", importID) })
-	if _, err := store.GetNetwork(context.Background(), importID); err != nil {
-		t.Fatalf("imported network config missing: %v", err)
-	}
-	if _, err := store.GetNode(context.Background(), importID, "imported-node"); err != nil {
-		t.Fatalf("imported node config missing: %v", err)
-	}
-	imported, err := store.ListRegisteredNodes(context.Background(), importID)
-	if err != nil || len(imported) != 1 {
-		t.Fatalf("imported registrations = %d, err = %v", len(imported), err)
-	}
-	if err := store.db.Exec("DELETE FROM networks WHERE id = ?", importID).Error; err != nil {
-		t.Fatal(err)
-	}
 	metadata := json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Integration test","cidr":"10.252.0.0/24"}`, networkID))
 	if err := store.CreateNetwork(ctx, networkID, metadata); err != nil {
 		t.Fatal(err)

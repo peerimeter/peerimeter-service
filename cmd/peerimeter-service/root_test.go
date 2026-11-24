@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-func TestRootCommandHasExplicitServeAndMigrateCommands(t *testing.T) {
+func TestRootCommandHasExplicitServeAndSchemaMigrationCommands(t *testing.T) {
 	root := newRootCommand()
 	for _, name := range []string{"serve", "migrate"} {
 		if _, _, err := root.Find([]string{name}); err != nil {
