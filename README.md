@@ -224,12 +224,16 @@ certificate path is not available inside the container.
 ### Storage backend changes
 
 The service no longer imports file-backed data into PostgreSQL. Keep using the
-file backend for existing current-format file stores. Before upgrading, export
-and convert any node documents embedded in `config.json` into
-`nodes/<network>/<node>.yaml`, and move records from the old
-`config.json.registrations/` directory into `registrations/`; back up the index
-and all sidecar directories first. The new file backend does not read those old
-locations, and the next index write drops embedded node documents. Before
+file backend for existing current-format file stores. Before upgrading, stop all
+file-backed writers and keep them stopped until the upgraded service starts.
+Back up the index and all sidecar directories, then export embedded node
+documents from `config.json` to `nodes/<network>/<node>.yaml` and move records
+from `config.json.registrations/` to `registrations/`. Do not overwrite an
+existing current node or registration file for the same network and node; keep
+the current file and convert only records with no current file. The new file
+backend does not read the old locations, and its next index write drops embedded
+node documents. A consistent backup alone does not prevent a deleted peer from
+being restored if its legacy registration is copied after deletion. Before
 switching to PostgreSQL, use an operator-managed export/import process.
 
 
