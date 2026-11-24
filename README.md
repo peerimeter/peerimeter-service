@@ -227,17 +227,19 @@ The service no longer imports file-backed data into PostgreSQL. Keep using the
 file backend for existing current-format file stores. Before upgrading, stop all
 file-backed writers and keep them stopped until the upgraded service starts.
 Back up the index and all sidecar directories, then export embedded node
-documents from `config.json` to `nodes/<network>/<node>.yaml` and embedded
-registration documents to `registrations/<network>/<node>.yaml`. Move records
-from `config.json.registrations/` to the corresponding `registrations/`
-directory. Do not overwrite an existing current node or registration file for
-the same network and node; keep the current file and convert or move only
-records with no current file. The new file backend does not read embedded
-records or the old sidecar directory, and its next index write drops embedded
-node and registration documents. A consistent backup alone does not prevent a
-deleted peer from being restored if its legacy registration is copied after
-deletion. Before
-switching to PostgreSQL, use an operator-managed export/import process.
+documents from the configured index (`PEERIMETER_DATA_FILE`, default
+`config.json`) to `nodes/<network>/<node>.yaml`. First move registration records
+from `<index>.registrations/` into `registrations/` beside the index. Then
+export embedded registration documents from the index to
+`registrations/<network>/<node>.yaml` only when that destination does not
+already exist; the old sidecar value took precedence when both sources had a
+record. Do not overwrite an existing current node or registration file for the
+same network and node; keep the current file and convert or move only records
+with no current file. The new file backend does not read embedded records or
+the old sidecar directory, and its next index write drops embedded node and
+registration documents. A consistent backup alone does not prevent a deleted
+peer from being restored if its legacy registration is copied after deletion.
+Before switching to PostgreSQL, use an operator-managed export/import process.
 
 
 ## API
