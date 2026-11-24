@@ -126,32 +126,6 @@ func TestDeleteNodeRemovesConfigAndRegistrationFiles(t *testing.T) {
 	}
 }
 
-func TestDeleteNodeDoesNotRestoreLegacyConfigAfterRestart(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"nodes":{"node-a":{"version":1}}}}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-
-	store, err = Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if _, err := store.GetNode(context.Background(), "net-a", "node-a"); err != ErrNotFound {
-		t.Fatalf("GetNode after restart = %v, want ErrNotFound", err)
-	}
-}
-
 func TestDeleteNodeRestoresStagedFilesWhenLaterRemovalFails(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(filepath.Join(root, "config.json"), 2)
@@ -262,57 +236,6 @@ func TestDeleteNodePreservesEmbeddedRegistrationsAcrossNetworks(t *testing.T) {
 	}
 }
 
-func TestSnapshotIncludesAllPersistedDocuments(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "config.json"), 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	if err := store.CreateNetwork(ctx, "mesh", json.RawMessage(`{"id":"mesh","name":"Mesh","cidr":"10.90.0.0/24"}`)); err != nil {
-		t.Fatal(err)
-	}
-	const originalConfig = `{"version":1,"name":"config"}`
-	if err := store.PutNetwork(ctx, "mesh", json.RawMessage(originalConfig)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.PutNode(ctx, "mesh", "node-a", json.RawMessage(`{"version":1,"name":"node"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.RegisterNode(ctx, "mesh", "node-a", json.RawMessage(`{"public_key":"public-key"}`)); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := store.Snapshot()
-	network := snapshot.Networks["mesh"]
-	if len(network.Metadata) == 0 || len(network.Config) == 0 || len(network.Nodes["node-a"]) == 0 || len(network.Registrations["node-a"]) == 0 {
-		t.Fatalf("incomplete snapshot: %#v", network)
-	}
-	network.Config[0] = 'x'
-	stored, err := store.GetNetwork(context.Background(), "mesh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stored) != originalConfig {
-		t.Fatalf("stored config changed through snapshot alias: got %s, want %s", stored, originalConfig)
-	}
-}
-
-func TestSnapshotEmptyRecognizesNodeAndRegistrationDocuments(t *testing.T) {
-	if !(Snapshot{}).Empty() {
-		t.Fatal("empty snapshot reported non-empty")
-	}
-	for name, snapshot := range map[string]Snapshot{
-		"node config":  {Networks: map[string]SnapshotNetwork{"mesh": {Nodes: map[string]json.RawMessage{"node": json.RawMessage(`{"version":1}`)}}}},
-		"registration": {Networks: map[string]SnapshotNetwork{"mesh": {Registrations: map[string]json.RawMessage{"node": json.RawMessage(`{"public_key":"key"}`)}}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if snapshot.Empty() {
-				t.Fatal("snapshot with persisted documents reported empty")
-			}
-		})
-	}
-}
-
 func TestOpenLoadsSidecarsWithoutIndex(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "nodes", "mesh"), filepath.Join(root, "registrations", "mesh")} {
@@ -331,13 +254,11 @@ func TestOpenLoadsSidecarsWithoutIndex(t *testing.T) {
 		t.Fatalf("open sidecar-only store: %v", err)
 	}
 	defer store.Close()
-	snapshot := store.Snapshot()
-	if snapshot.Empty() {
-		t.Fatal("sidecar-only snapshot reported empty")
+	if _, err := store.GetNode(context.Background(), "mesh", "node-a"); err != nil {
+		t.Fatalf("node sidecar not loaded: %v", err)
 	}
-	network := snapshot.Networks["mesh"]
-	if len(network.Nodes["node-a"]) == 0 || len(network.Registrations["node-a"]) == 0 {
-		t.Fatalf("sidecars not loaded: %#v", network)
+	if registrations, err := store.ListRegisteredNodes(context.Background(), "mesh"); err != nil || len(registrations) != 1 {
+		t.Fatalf("registration sidecar not loaded: %#v, %v", registrations, err)
 	}
 }
 
@@ -354,60 +275,6 @@ func TestStoreRejectsPathLikeIDs(t *testing.T) {
 		if err := store.PutNode(context.Background(), "network", id, []byte(`{"version":1}`)); err != ErrInvalidID {
 			t.Errorf("PutNode node ID %q error = %v, want ErrInvalidID", id, err)
 		}
-	}
-}
-
-func TestMigratesLegacyNodeDocumentsToSeparateYAMLFiles(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"config":{"version":1},"nodes":{"node-a":{"version":1,"public_key":"fake"}}}}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if _, err := store.GetNode(context.Background(), "net-a", "node-a"); err != nil {
-		t.Fatalf("legacy node unavailable: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "nodes", "net-a", "node-a.yaml")); err != nil {
-		t.Fatalf("legacy node YAML was not created: %v", err)
-	}
-}
-
-func TestLoadsLegacyRegistrationsWhenNewDirectoryExists(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacyDir := filepath.Join(path+".registrations", "net-a")
-	currentDir := filepath.Join(filepath.Dir(path), "registrations", "net-a")
-	for dir, files := range map[string]map[string]string{
-		legacyDir:  {"node-a.yaml": "version: 1\nsource: legacy\n", "node-b.yaml": "version: 1\nsource: legacy\n"},
-		currentDir: {"node-a.yaml": "version: 1\nsource: current\n"},
-	} {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			t.Fatal(err)
-		}
-		for name, contents := range files {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	store, err := Open(path, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	registrations := store.state.Networks["net-a"].Registrations
-	if len(registrations) != 2 {
-		t.Fatalf("loaded %d registrations, want 2", len(registrations))
-	}
-	if !strings.Contains(string(registrations["node-a"]), `"source":"current"`) {
-		t.Fatalf("current registration did not take precedence: %s", registrations["node-a"])
-	}
-	if !strings.Contains(string(registrations["node-b"]), `"source":"legacy"`) {
-		t.Fatalf("legacy registration was not loaded: %s", registrations["node-b"])
 	}
 }
 
@@ -481,28 +348,6 @@ func TestNodeWriteUsesJSONLastValueForDuplicateKeys(t *testing.T) {
 	}
 	if err != nil || decoded["name"] != "new" {
 		t.Fatalf("reopened duplicate-key node = %s, err = %v", got, err)
-	}
-}
-
-func TestLegacyMigrationPreservesLargeJSONIntegers(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"config":{"version":1},"nodes":{"node-a":{"version":1,"revision":9007199254740993,"name":"old","name":"new"}}}}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-	store, err = Open(path, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	got, err := store.GetNode(context.Background(), "net-a", "node-a")
-	if err != nil || !strings.Contains(string(got), `"revision":9007199254740993`) || !strings.Contains(string(got), `"name":"new"`) {
-		t.Fatalf("migrated node = %s, err = %v", got, err)
 	}
 }
 

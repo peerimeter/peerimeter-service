@@ -46,32 +46,10 @@ type fileState struct {
 }
 
 type network struct {
+	Nodes         map[string]json.RawMessage `json:"-"`
 	Config        json.RawMessage            `json:"config,omitempty"`
 	Metadata      json.RawMessage            `json:"metadata,omitempty"`
-	Nodes         map[string]json.RawMessage `json:"nodes,omitempty"`
 	Registrations map[string]json.RawMessage `json:"registrations,omitempty"`
-}
-
-// Snapshot is a deep copy of every document persisted by the file backend.
-type Snapshot struct {
-	Networks map[string]SnapshotNetwork
-}
-
-type SnapshotNetwork struct {
-	Config        json.RawMessage
-	Metadata      json.RawMessage
-	Nodes         map[string]json.RawMessage
-	Registrations map[string]json.RawMessage
-}
-
-// Empty reports whether the snapshot contains any persisted network, node, or registration data.
-func (s Snapshot) Empty() bool {
-	for _, network := range s.Networks {
-		if len(network.Metadata) != 0 || len(network.Config) != 0 || len(network.Nodes) != 0 || len(network.Registrations) != 0 {
-			return false
-		}
-	}
-	return true
 }
 
 type write struct {
@@ -119,9 +97,6 @@ func Open(path string, queueSize int) (*Store, error) {
 			return nil, fmt.Errorf("unsupported or invalid config file")
 		}
 	}
-	if err := s.migrateLegacyNodes(); err != nil {
-		return nil, err
-	}
 	if err := s.loadNodeFiles(); err != nil {
 		return nil, err
 	}
@@ -145,22 +120,15 @@ func (s *Store) loadNodeFiles() error {
 }
 
 func (s *Store) loadRegistrationFiles() error {
-	// Load old files first, then overlay the current directory so new files win
-	// even if a previous write created only part of the current directory.
-	for _, root := range []string{s.path + ".registrations", s.registrationDir()} {
-		if err := loadYAMLDocuments(root, "node registration", func(networkID, nodeID string, value json.RawMessage) error {
-			network := s.state.Networks[networkID]
-			if network.Registrations == nil {
-				network.Registrations = make(map[string]json.RawMessage)
-			}
-			network.Registrations[nodeID] = value
-			s.state.Networks[networkID] = network
-			return nil
-		}); err != nil {
-			return err
+	return loadYAMLDocuments(s.registrationDir(), "node registration", func(networkID, nodeID string, value json.RawMessage) error {
+		network := s.state.Networks[networkID]
+		if network.Registrations == nil {
+			network.Registrations = make(map[string]json.RawMessage)
 		}
-	}
-	return nil
+		network.Registrations[nodeID] = value
+		s.state.Networks[networkID] = network
+		return nil
+	})
 }
 
 func loadYAMLDocuments(root, label string, visit func(networkID, nodeID string, document json.RawMessage) error) error {
@@ -201,26 +169,6 @@ func loadYAMLDocuments(root, label string, visit func(networkID, nodeID string, 
 				return fmt.Errorf("encode %s: %w", label, err)
 			}
 			if err := visit(networkID, nodeID, document); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Store) migrateLegacyNodes() error {
-	for networkID, network := range s.state.Networks {
-		for nodeID, value := range network.Nodes {
-			if !networking.ValidID(networkID) || !networking.ValidID(nodeID) {
-				return fmt.Errorf("invalid network or node ID in legacy configuration")
-			}
-			path := filepath.Join(s.nodeDir(), networkID, nodeID+".yaml")
-			if _, err := os.Stat(path); err == nil {
-				continue
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("inspect legacy node config: %w", err)
-			}
-			if _, err := s.persistNode(networkID, nodeID, value); err != nil {
 				return err
 			}
 		}
@@ -307,18 +255,6 @@ func (s *Store) ListNetworks(_ context.Context) (map[string]json.RawMessage, err
 		}
 	}
 	return result, nil
-}
-
-// Snapshot returns all file-backed network, node, and registration documents.
-func (s *Store) Snapshot() Snapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := Snapshot{Networks: make(map[string]SnapshotNetwork, len(s.state.Networks))}
-	for id, value := range s.state.Networks {
-		copy := cloneNetwork(value)
-		result.Networks[id] = SnapshotNetwork{Config: copy.Config, Metadata: copy.Metadata, Nodes: copy.Nodes, Registrations: copy.Registrations}
-	}
-	return result
 }
 
 func (s *Store) CreateNetwork(ctx context.Context, id string, value json.RawMessage) error {
@@ -509,7 +445,6 @@ func (s *Store) deleteNodeFiles(networkID, nodeID string, next fileState) (bool,
 	paths := []string{
 		filepath.Join(s.nodeDir(), networkID, nodeID+".yaml"),
 		filepath.Join(s.registrationDir(), networkID, nodeID+".yaml"),
-		filepath.Join(s.path+".registrations", networkID, nodeID+".yaml"),
 	}
 	staged := make([]stagedRemoval, 0, len(paths))
 	for _, path := range paths {
