@@ -49,7 +49,7 @@ type network struct {
 	Nodes         map[string]json.RawMessage `json:"-"`
 	Config        json.RawMessage            `json:"config,omitempty"`
 	Metadata      json.RawMessage            `json:"metadata,omitempty"`
-	Registrations map[string]json.RawMessage `json:"registrations,omitempty"`
+	Registrations map[string]json.RawMessage `json:"-"`
 }
 
 type write struct {
