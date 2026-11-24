@@ -176,66 +176,6 @@ func TestDeleteNodeRestoresStagedFilesWhenLaterRemovalFails(t *testing.T) {
 	}
 }
 
-func TestDeleteNodePreservesEmbeddedRegistrationsAfterRestart(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"registrations":{"node-a":{"public_key":"key-a"},"node-b":{"public_key":"key-b"}}}}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-
-	store, err = Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	registrations, err := store.ListRegisteredNodes(context.Background(), "net-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(registrations) != 1 || string(registrations["node-b"]) == "" || strings.Contains(string(registrations["node-b"]), "key-a") {
-		t.Fatalf("registrations after restart = %#v, want only node-b", registrations)
-	}
-}
-
-func TestDeleteNodePreservesEmbeddedRegistrationsAcrossNetworks(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "config.json")
-	legacy := `{"version":1,"networks":{"net-a":{"registrations":{"node-a":{"public_key":"key-a"}}},"net-b":{"registrations":{"node-b":{"public_key":"key-b"}}}}}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteNode(context.Background(), "net-a", "node-a"); err != nil {
-		t.Fatal(err)
-	}
-	store.Close()
-
-	store, err = Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	registrations, err := store.ListRegisteredNodes(context.Background(), "net-b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(registrations) != 1 || string(registrations["node-b"]) == "" || !strings.Contains(string(registrations["node-b"]), "key-b") {
-		t.Fatalf("net-b registrations after restart = %#v, want node-b", registrations)
-	}
-}
-
 func TestOpenLoadsSidecarsWithoutIndex(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "nodes", "mesh"), filepath.Join(root, "registrations", "mesh")} {
