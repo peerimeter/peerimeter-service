@@ -23,13 +23,7 @@ func (a *API) registerNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var registration nodeRegistration
-	if err := decodeStrictJSON(w, r, &registration); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			a.writePutResult(w, err)
-			return
-		}
-		writeError(w, http.StatusBadRequest, "node registration is invalid")
+	if !a.decodeJSONOrWriteError(w, r, &registration, "node registration is invalid") {
 		return
 	}
 	if !validRegistration(registration) {
@@ -114,7 +108,12 @@ func validPublicEndpoint(raw string) bool {
 		return true
 	}
 	endpoint, err := netip.ParseAddrPort(raw)
-	return err == nil && endpoint.Port() != 0 && (endpoint.Addr().IsGlobalUnicast() || endpoint.Addr().IsLoopback()) && !endpoint.Addr().IsLinkLocalUnicast() && endpoint.Addr().Zone() == "" && !endpoint.Addr().Is4In6()
+	if err != nil || endpoint.Port() == 0 {
+		return false
+	}
+	address := endpoint.Addr()
+	return (address.IsGlobalUnicast() || address.IsLoopback()) &&
+		!address.IsLinkLocalUnicast() && address.Zone() == "" && !address.Is4In6()
 }
 
 func allZero(value []byte) bool {

@@ -126,6 +126,19 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
+func (a *API) decodeJSONOrWriteError(w http.ResponseWriter, r *http.Request, dst any, invalidMessage string) bool {
+	if err := decodeStrictJSON(w, r, dst); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			a.writePutResult(w, err)
+		} else {
+			writeError(w, http.StatusBadRequest, invalidMessage)
+		}
+		return false
+	}
+	return true
+}
+
 func (a *API) writePutResult(w http.ResponseWriter, err error) {
 	if err != nil {
 		if errors.Is(err, configstore.ErrInvalidID) {

@@ -456,27 +456,36 @@ func (s *Store) deleteNodeFiles(networkID, nodeID string, next fileState) (bool,
 			staged = append(staged, removal)
 		}
 	}
-	for remainingNetworkID, network := range next.Networks {
-		for remainingNodeID, registration := range network.Registrations {
-			if _, err := s.persistRegistration(remainingNetworkID, remainingNodeID, registration); err != nil {
-				return false, errors.Join(fmt.Errorf("persist remaining peer registration: %w", err), restoreStagedRemovals(staged))
-			}
-		}
+	if err := s.persistAllRegistrations(next.Networks); err != nil {
+		return false, errors.Join(err, restoreStagedRemovals(staged))
 	}
 	committed, err := s.persist(next)
 	if err != nil {
 		if committed {
-			for _, removal := range staged {
-				_ = os.Remove(removal.backupPath)
-			}
+			removeStagedBackups(staged)
 			return true, err
 		}
 		return committed, errors.Join(err, restoreStagedRemovals(staged))
 	}
+	removeStagedBackups(staged)
+	return true, nil
+}
+
+func (s *Store) persistAllRegistrations(networks map[string]network) error {
+	for networkID, currentNetwork := range networks {
+		for nodeID, registration := range currentNetwork.Registrations {
+			if _, err := s.persistRegistration(networkID, nodeID, registration); err != nil {
+				return fmt.Errorf("persist remaining peer registration: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func removeStagedBackups(staged []stagedRemoval) {
 	for _, removal := range staged {
 		_ = os.Remove(removal.backupPath)
 	}
-	return true, nil
 }
 
 type stagedRemoval struct {
