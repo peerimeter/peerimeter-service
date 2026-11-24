@@ -224,9 +224,13 @@ certificate path is not available inside the container.
 ### Storage backend changes
 
 The service no longer imports file-backed data into PostgreSQL. Keep using the
-file backend for existing file stores, or migrate data with an operator-managed
-export/import process before switching backends. Back up both the index and its
-sidecar directories before changing storage.
+file backend for existing current-format file stores. Before upgrading, export
+and convert any node documents embedded in `config.json` into
+`nodes/<network>/<node>.yaml`, and move records from the old
+`config.json.registrations/` directory into `registrations/`; back up the index
+and all sidecar directories first. The new file backend does not read those old
+locations, and the next index write drops embedded node documents. Before
+switching to PostgreSQL, use an operator-managed export/import process.
 
 
 ## API
