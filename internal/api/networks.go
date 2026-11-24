@@ -43,13 +43,7 @@ func (a *API) getNetworkMetadata(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createNetwork(w http.ResponseWriter, r *http.Request) {
 	var request networkRequest
-	if err := decodeStrictJSON(w, r, &request); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			a.writePutResult(w, err)
-			return
-		}
-		writeError(w, http.StatusBadRequest, "body must contain version, id, name and cidr")
+	if !a.decodeJSONOrWriteError(w, r, &request, "body must contain version, id, name and cidr") {
 		return
 	}
 	if !validNetworkRequest(request) {
