@@ -183,6 +183,23 @@ func TestAPIKeyLoginCreatesStatelessSuperadminSession(t *testing.T) {
 	}
 }
 
+func TestAPIKeySessionAllowsSameOriginDashboardWritesWithoutSSO(t *testing.T) {
+	handler := newTestAPI(t, "https://service.example")
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"api_key":"test-static-key"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("API key login = %d: %s", login.Code, login.Body)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
+	request.AddCookie(login.Result().Cookies()[0])
+	request.Header.Set("Origin", "https://service.example")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("same-origin session write = %d: %s", response.Code, response.Body)
+	}
+}
+
 func TestGitHubSessionAuthorizesAPIWithoutAPIKey(t *testing.T) {
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
 	if err != nil {
