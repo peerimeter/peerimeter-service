@@ -4,7 +4,25 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
+
+func TestDocumentSetsLastActive(t *testing.T) {
+	before := time.Now().UTC()
+	got, err := Document("node-a", json.RawMessage(`{"public_key":"key-a"}`), json.RawMessage(`{"cidr":"10.90.0.0/24"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		LastActive time.Time `json:"last_active"`
+	}
+	if err := json.Unmarshal(got, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.LastActive.Before(before) || document.LastActive.After(time.Now().UTC()) {
+		t.Fatalf("last_active = %s, want current UTC time", document.LastActive)
+	}
+}
 
 func TestDocumentPreservesAddressOnRepeatRegistration(t *testing.T) {
 	registrations := map[string]json.RawMessage{
