@@ -37,6 +37,48 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DataFile != "/var/lib/peerimeter/config.json" || cfg.ListenAddr != "127.0.0.1" || !cfg.RequireHTTPS || !cfg.AutoMigrate || cfg.Port != "8080" {
 		t.Fatalf("Load() defaults = %#v, unexpected values", cfg)
 	}
+	if !cfg.IsPasswordLoginEnabled() {
+		t.Fatal("password login default = false without SSO")
+	}
+}
+
+func TestGitHubSSODisablesPasswordLoginByDefault(t *testing.T) {
+	setGitHubSSOEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.GitHubSSOEnabled() || cfg.IsPasswordLoginEnabled() {
+		t.Fatalf("SSO/password defaults = %v/%v", cfg.GitHubSSOEnabled(), cfg.IsPasswordLoginEnabled())
+	}
+	t.Setenv("PEERIMETER_PASSWORD_LOGIN_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IsPasswordLoginEnabled() {
+		t.Fatal("explicit password login was disabled")
+	}
+}
+
+func TestLoadRejectsIncompleteGitHubSSO(t *testing.T) {
+	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
+	t.Setenv("PEERIMETER_GITHUB_ORG", "peerimeter")
+	if _, err := Load(); err == nil {
+		t.Fatal("incomplete GitHub SSO configuration succeeded")
+	}
+}
+
+func setGitHubSSOEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
+	t.Setenv("PEERIMETER_GITHUB_CLIENT_ID", "client-id")
+	t.Setenv("PEERIMETER_GITHUB_CLIENT_SECRET", "client-secret")
+	t.Setenv("PEERIMETER_GITHUB_ORG", "peerimeter")
+	t.Setenv("PEERIMETER_GITHUB_TEAM", "home")
+	t.Setenv("PEERIMETER_GITHUB_DASHBOARD_URL", "https://dashboard.example.test")
+	t.Setenv("PEERIMETER_AUTH_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("PEERIMETER_PUBLIC_API_URL", "https://service.example.test")
 }
 
 func TestLoadCanDisableAutomaticMigrations(t *testing.T) {

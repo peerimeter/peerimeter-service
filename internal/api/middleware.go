@@ -27,6 +27,7 @@ func (a *API) cors(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Origin", canonical)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
@@ -40,12 +41,16 @@ func (a *API) cors(next http.Handler) http.Handler {
 
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.auth != nil && a.auth.validSession(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		provided, ok := bearerToken(r)
 		if !ok || a.key == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		masterOK := constantTimeEqual(provided, a.key)
+		masterOK := a.passwordLogin && constantTimeEqual(provided, a.key)
 		networkID := requestNetworkID(r)
 		token := networkToken(a.key, networkID)
 		networkOK := networkID != "" && constantTimeEqual(provided, token)
@@ -60,7 +65,9 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 func (a *API) authenticateManagement(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided, ok := bearerToken(r)
-		if !ok || a.key == "" || !constantTimeEqual(provided, a.key) {
+		sessionOK := a.auth != nil && a.auth.validSession(r)
+		keyOK := a.passwordLogin && ok && a.key != "" && constantTimeEqual(provided, a.key)
+		if !sessionOK && !keyOK {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
