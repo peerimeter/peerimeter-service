@@ -289,22 +289,26 @@ func TestOAuthStateIsBoundToStartingBrowser(t *testing.T) {
 	if state == "" || stateCookie.Name != oauthStateCookieName {
 		t.Fatalf("OAuth state or browser cookie missing: state=%q cookie=%v", state, stateCookie)
 	}
-	callbackURL := "/auth/github/callback?state=" + url.QueryEscape(state) + "&error=access_denied"
+	callbackURL := "/auth/github/callback?state=" + url.QueryEscape(state)
 	callbackWithoutCookie := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, callbackWithoutCookie)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("callback without browser cookie = %d, want 401", response.Code)
 	}
+	callbackWithMismatchedCookie := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	callbackWithMismatchedCookie.AddCookie(&http.Cookie{Name: oauthStateCookieName, Value: "other-browser"})
+	mismatchedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(mismatchedResponse, callbackWithMismatchedCookie)
+	if mismatchedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("callback with mismatched browser cookie = %d, want 401", mismatchedResponse.Code)
+	}
 	callbackFromOriginalBrowser := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	callbackFromOriginalBrowser.AddCookie(stateCookie)
 	originalResponse := httptest.NewRecorder()
 	handler.ServeHTTP(originalResponse, callbackFromOriginalBrowser)
-	if originalResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("denied callback status = %d, want 401", originalResponse.Code)
-	}
-	if originalResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("denied callback status = %d, want 401", originalResponse.Code)
+	if originalResponse.Code != http.StatusBadRequest {
+		t.Fatalf("valid browser callback without code = %d, want 400", originalResponse.Code)
 	}
 }
 
