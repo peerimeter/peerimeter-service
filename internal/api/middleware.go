@@ -100,6 +100,10 @@ func (a *API) validSessionRequestOrigin(r *http.Request) bool {
 	if a.allowedOrigins[requestOrigin] {
 		return true
 	}
+	serviceOrigin, err := corsorigin.Normalize(a.publicURL)
+	if err == nil && requestOrigin == serviceOrigin {
+		return true
+	}
 	if a.auth == nil {
 		return false
 	}
