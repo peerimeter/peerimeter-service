@@ -244,9 +244,10 @@ Before switching to PostgreSQL, use an operator-managed export/import process.
 
 ## API
 
-All routes except health checks, `GET /api/v1/auth/config`, and GitHub OAuth
-routes require authentication. Management calls use `PEERIMETER_API_KEY` or a
-GitHub SSO session; agent join bundles contain a network-scoped enrollment
+All routes except health checks, `GET /api/v1/auth/config`, the API-key session
+exchange, and GitHub OAuth routes require authentication. Dashboard logins use
+a signed session cookie; direct API clients can continue to use
+`PEERIMETER_API_KEY`. Agent join bundles contain a network-scoped enrollment
 token. Requests and responses use JSON. Config and registration documents use
 `"version": 1` and request bodies are limited to 1 MiB.
 
@@ -255,9 +256,11 @@ token. Requests and responses use JSON. Config and registration documents use
 | `GET` | `/healthz` | Unauthenticated liveness check (`200` JSON `{"success":true}`); does not check dependencies. |
 | `GET` | `/health` | Unauthenticated readiness check (`200` JSON `{"success":true}` when file storage is configured or PostgreSQL is reachable; `503` JSON when PostgreSQL cannot be reached; the database error is logged by the service). |
 | `GET` | `/api/v1/auth/config` | Public login options for the dashboard. |
+| `POST` | `/api/v1/auth/login` | Exchange an API key for a signed dashboard session when password login is enabled. |
+| `GET` | `/api/v1/auth/session` | Return the username and authentication method for the signed dashboard session. |
 | `GET` | `/auth/github/login` | Start GitHub OAuth login when configured. |
 | `GET` | `/auth/github/callback` | Complete OAuth login after checking membership in the configured GitHub team. |
-| `POST` | `/api/v1/auth/logout` | Revoke the current GitHub session cookie. |
+| `POST` | `/api/v1/auth/logout` | Clear the current signed dashboard session cookie. |
 | `GET` | `/api/v1/version` | Return the running service release version. |
 | `GET` | `/api/v1/networks` | List managed network metadata. |
 | `POST` | `/api/v1/networks` | Create a managed network. |
@@ -383,7 +386,7 @@ PEERIMETER_TEST_DATABASE_URL='postgresql://user:password@host:5432/test?sslmode=
 | `PEERIMETER_GITHUB_ORG` | Empty | GitHub organization containing the allowed team, for example `peerimeter`. |
 | `PEERIMETER_GITHUB_TEAM` | Empty | Allowed team slug, for example `home`. Team membership is checked on each OAuth login. |
 | `PEERIMETER_GITHUB_DASHBOARD_URL` | Empty | Dashboard URL to open after successful login. |
-| `PEERIMETER_AUTH_SESSION_SECRET` | Empty | Random secret of at least 32 characters used to hash session identifiers. |
+| `PEERIMETER_AUTH_SESSION_SECRET` | Derived from API key | Optional shared random secret of at least 32 characters used to sign OAuth state and session cookies. Required when GitHub SSO is configured; set the same value on every service instance. |
 | `PEERIMETER_PASSWORD_LOGIN_ENABLED` | `false` with SSO; otherwise `true` | Controls API-key login in the dashboard. SSO team sessions continue to authorize management routes. |
 | `PEERIMETER_STORAGE_BACKEND` | `file` | Persistence selection: `file` or `postgres`. |
 | `PEERIMETER_DATABASE_URL` | Compose builds a URL from the `POSTGRES_*` variables | PostgreSQL connection URL; required when the service backend is `postgres`. Remote connections require `sslmode=verify-full`, unless `PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE=true`; local development can use `sslmode=disable`. |
@@ -403,11 +406,14 @@ Use a trusted reverse proxy for TLS before exposing the service beyond a
 trusted local development environment. The service uses one shared static
 management key; enrollment tokens are derived from it and scoped to one network.
 When GitHub SSO is enabled, the service checks active membership in the
-configured organization team. Sessions are held in memory for 12 hours and are
-revoked at logout or service restart. Use HTTPS and configure the dashboard
-origin in `PEERIMETER_CORS_ALLOWED_ORIGINS` when the dashboard has a separate
-origin. Cookie-authenticated write requests are also restricted to the
-configured `PEERIMETER_GITHUB_DASHBOARD_URL` origin.
+configured organization team. OAuth state and session cookies are signed and
+stateless, so all service instances must share the session secret (or, without
+SSO, the same API key from which it is derived). Sessions expire after 12 hours;
+logout clears the browser cookie. A copied session cookie remains valid until
+expiry or signing-secret rotation. Use HTTPS and configure the dashboard origin
+in `PEERIMETER_CORS_ALLOWED_ORIGINS` when the dashboard has a separate origin.
+Cookie-authenticated write requests are restricted to the configured dashboard
+origin or an exact allowed CORS origin.
 Rotating the key invalidates existing join bundles and enrollment tokens, so
 issue fresh bundles to agents that should remain connected.
 

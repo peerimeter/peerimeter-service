@@ -45,7 +45,7 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if a.auth != nil && a.auth.validSession(r) {
+		if a.sessionClaimsValid(r) {
 			if !a.validSessionRequestOrigin(r) {
 				writeError(w, http.StatusForbidden, "untrusted origin")
 				return
@@ -76,7 +76,7 @@ func (a *API) authenticateManagement(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		sessionOK := a.auth != nil && a.auth.validSession(r)
+		sessionOK := a.sessionClaimsValid(r)
 		if !sessionOK {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -95,6 +95,12 @@ func (a *API) validSessionRequestOrigin(r *http.Request) bool {
 	}
 	requestOrigin, err := corsorigin.Normalize(r.Header.Get("Origin"))
 	if err != nil {
+		return false
+	}
+	if a.allowedOrigins[requestOrigin] {
+		return true
+	}
+	if a.auth == nil {
 		return false
 	}
 	trustedOrigin, err := corsorigin.Normalize(a.auth.config.DashboardURL)

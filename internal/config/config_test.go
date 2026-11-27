@@ -69,6 +69,14 @@ func TestLoadRejectsIncompleteGitHubSSO(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsShortSessionSecretWithoutSSO(t *testing.T) {
+	t.Setenv("PEERIMETER_API_KEY", "test-api-key")
+	t.Setenv("PEERIMETER_AUTH_SESSION_SECRET", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("short session secret was accepted")
+	}
+}
+
 func setGitHubSSOEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("PEERIMETER_API_KEY", "test-api-key")

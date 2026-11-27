@@ -37,6 +37,7 @@ func runServer() error {
 		Addr: net.JoinHostPort(cfg.ListenAddr, cfg.Port),
 		Handler: api.NewWithAuth(cfg.APIKey, cfg.PublicAPIURL, store, logger, cfg.RequireHTTPS, api.AuthOptions{
 			PasswordLogin: cfg.IsPasswordLoginEnabled(),
+			SessionSecret: cfg.AuthSessionSecret,
 			GitHub: api.GitHubConfig{
 				ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret,
 				Organization: cfg.GitHubOrganization, Team: cfg.GitHubTeam,

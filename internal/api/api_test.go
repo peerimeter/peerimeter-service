@@ -153,6 +153,36 @@ func TestAuthConfigAndPasswordLoginToggle(t *testing.T) {
 	}
 }
 
+func TestAPIKeyLoginCreatesStatelessSuperadminSession(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	newInstance := func() http.Handler {
+		return NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{PasswordLogin: true}, "https://dashboard.example")
+	}
+	login := httptest.NewRecorder()
+	newInstance().ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"api_key":"test-static-key"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("API key login = %d: %s", login.Code, login.Body)
+	}
+	if !strings.Contains(login.Body.String(), `"username":"superadmin"`) {
+		t.Fatalf("login identity = %s", login.Body)
+	}
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly {
+		t.Fatalf("session cookie = %#v", cookies)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	request.AddCookie(cookies[0])
+	session := httptest.NewRecorder()
+	newInstance().ServeHTTP(session, request)
+	if session.Code != http.StatusOK || !strings.Contains(session.Body.String(), `"username":"superadmin"`) {
+		t.Fatalf("session on second instance = %d %s", session.Code, session.Body)
+	}
+}
+
 func TestGitHubSessionAuthorizesAPIWithoutAPIKey(t *testing.T) {
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
 	if err != nil {
@@ -161,11 +191,13 @@ func TestGitHubSessionAuthorizesAPIWithoutAPIKey(t *testing.T) {
 	defer store.Close()
 	githubConfig := GitHubConfig{ClientID: "client", SessionSecret: "session-secret"}
 	auth := NewGitHubAuth(githubConfig)
-	const sessionID = "test-session"
-	auth.sessions[sessionHash(githubConfig.SessionSecret, sessionID)] = time.Now().Add(time.Hour)
 	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{GitHub: githubConfig, GitHubAuth: auth}, "https://dashboard.example")
 	apiRequest := httptest.NewRequest(http.MethodGet, "/api/v1/networks", nil)
-	apiRequest.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+	value, err := signPayload(githubConfig.SessionSecret, "peerimeter-session-v1", sessionClaims{Username: "octocat", AuthMethod: "github", ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiRequest.AddCookie(&http.Cookie{Name: authCookieName, Value: value})
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, apiRequest)
 	if response.Code != http.StatusOK {
@@ -181,12 +213,14 @@ func TestGitHubSessionRequiresTrustedOriginForWrites(t *testing.T) {
 	defer store.Close()
 	githubConfig := GitHubConfig{ClientID: "client", SessionSecret: "session-secret", DashboardURL: "https://dashboard.example"}
 	auth := NewGitHubAuth(githubConfig)
-	const sessionID = "test-session"
-	auth.sessions[sessionHash(githubConfig.SessionSecret, sessionID)] = time.Now().Add(time.Hour)
 	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{PasswordLogin: true, GitHub: githubConfig, GitHubAuth: auth}, "https://dashboard.example")
+	sessionValue, err := signPayload(githubConfig.SessionSecret, "peerimeter-session-v1", sessionClaims{Username: "octocat", AuthMethod: "github", ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	createNetwork := func(origin string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
-		request.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+		request.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionValue})
 		if origin != "" {
 			request.Header.Set("Origin", origin)
 		}
@@ -206,7 +240,7 @@ func TestGitHubSessionRequiresTrustedOriginForWrites(t *testing.T) {
 	requestWithBearer := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-a/config", strings.NewReader(`{"version":1,"name":"mesh"}`))
 	requestWithBearer.Header.Set("Authorization", "Bearer test-static-key")
 	requestWithBearer.Header.Set("Origin", "https://untrusted.example")
-	requestWithBearer.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+	requestWithBearer.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionValue})
 	bearerResponse := httptest.NewRecorder()
 	handler.ServeHTTP(bearerResponse, requestWithBearer)
 	if bearerResponse.Code != http.StatusNoContent {
@@ -245,9 +279,6 @@ func TestOAuthStateIsBoundToStartingBrowser(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("callback without browser cookie = %d, want 401", response.Code)
 	}
-	if _, exists := auth.states[state]; !exists {
-		t.Fatal("state was consumed by callback from the wrong browser")
-	}
 	callbackFromOriginalBrowser := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	callbackFromOriginalBrowser.AddCookie(stateCookie)
 	originalResponse := httptest.NewRecorder()
@@ -255,8 +286,49 @@ func TestOAuthStateIsBoundToStartingBrowser(t *testing.T) {
 	if originalResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("denied callback status = %d, want 401", originalResponse.Code)
 	}
-	if _, exists := auth.states[state]; exists {
-		t.Fatal("valid browser callback did not consume state")
+	if originalResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("denied callback status = %d, want 401", originalResponse.Code)
+	}
+}
+
+func TestStatelessOAuthAndSessionWorkAcrossServiceInstances(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secret := "shared-session-secret-with-at-least-32-chars"
+	config := GitHubConfig{ClientID: "client", SessionSecret: secret, DashboardURL: "https://dashboard.example"}
+	newInstance := func() http.Handler {
+		return NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{PasswordLogin: true, GitHub: config}, "https://dashboard.example")
+	}
+	first, second := newInstance(), newInstance()
+	login := httptest.NewRecorder()
+	first.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/auth/github/login", nil))
+	location, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := location.Query().Get("state")
+	stateCookie := login.Result().Cookies()[0]
+	callback := httptest.NewRequest(http.MethodGet, "/auth/github/callback?state="+url.QueryEscape(state), nil)
+	callback.AddCookie(stateCookie)
+	callbackResponse := httptest.NewRecorder()
+	second.ServeHTTP(callbackResponse, callback)
+	if callbackResponse.Code != http.StatusBadRequest {
+		t.Fatalf("cross-instance callback status = %d, want 400 (valid state reached missing-code check): %s", callbackResponse.Code, callbackResponse.Body)
+	}
+	keyLogin := httptest.NewRecorder()
+	first.ServeHTTP(keyLogin, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"api_key":"test-static-key"}`)))
+	if keyLogin.Code != http.StatusOK {
+		t.Fatalf("cross-instance session issue = %d: %s", keyLogin.Code, keyLogin.Body)
+	}
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	sessionRequest.AddCookie(keyLogin.Result().Cookies()[0])
+	sessionResponse := httptest.NewRecorder()
+	second.ServeHTTP(sessionResponse, sessionRequest)
+	if sessionResponse.Code != http.StatusOK || !strings.Contains(sessionResponse.Body.String(), `"username":"superadmin"`) {
+		t.Fatalf("cross-instance session = %d %s", sessionResponse.Code, sessionResponse.Body)
 	}
 }
 
