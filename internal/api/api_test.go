@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/peerimeter/peerimeter-service/internal/configstore"
 )
@@ -41,6 +42,9 @@ func TestCORSAllowsConfiguredOriginAndAuthorizationPreflight(t *testing.T) {
 	}
 	if got := result.Header().Get("Access-Control-Allow-Origin"); got != "https://dashboard.example.test" {
 		t.Fatalf("allow-origin = %q", got)
+	}
+	if got := result.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("allow-credentials = %q, want true", got)
 	}
 	if got := result.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 		t.Fatalf("allow-methods = %q", got)
@@ -124,6 +128,47 @@ func TestHealthIsUnauthenticatedAndConfigIsProtected(t *testing.T) {
 		if tc.wantBody != "" && res.Body.String() != tc.wantBody {
 			t.Errorf("GET %s body = %q, want %q", tc.path, res.Body.String(), tc.wantBody)
 		}
+	}
+}
+
+func TestAuthConfigAndPasswordLoginToggle(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{PasswordLogin: false})
+	config := httptest.NewRecorder()
+	handler.ServeHTTP(config, httptest.NewRequest(http.MethodGet, "/api/v1/auth/config", nil))
+	if config.Code != http.StatusOK || config.Body.String() != "{\"github_sso_enabled\":false,\"password_login_enabled\":false}\n" {
+		t.Fatalf("auth config = %d %s", config.Code, config.Body)
+	}
+	protected := httptest.NewRequest(http.MethodGet, "/api/v1/networks", nil)
+	protected.Header.Set("Authorization", "Bearer test-static-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, protected)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled API key status = %d", response.Code)
+	}
+}
+
+func TestGitHubSessionAuthorizesAPIWithoutAPIKey(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	githubConfig := GitHubConfig{ClientID: "client", SessionSecret: "session-secret"}
+	auth := NewGitHubAuth(githubConfig)
+	const sessionID = "test-session"
+	auth.sessions[sessionHash(githubConfig.SessionSecret, sessionID)] = time.Now().Add(time.Hour)
+	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{GitHub: githubConfig, GitHubAuth: auth}, "https://dashboard.example")
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/v1/networks", nil)
+	apiRequest.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, apiRequest)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GitHub session status = %d: %s", response.Code, response.Body)
 	}
 }
 

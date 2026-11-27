@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/caarlos0/env/v11"
@@ -40,6 +42,13 @@ func LoadMigrate() (MigrateConfig, error) {
 // Config contains the service settings loaded from environment variables.
 type Config struct {
 	APIKey                      string `env:"PEERIMETER_API_KEY,required"`
+	PasswordLogin               string `env:"PEERIMETER_PASSWORD_LOGIN_ENABLED"`
+	GitHubClientID              string `env:"PEERIMETER_GITHUB_CLIENT_ID"`
+	GitHubClientSecret          string `env:"PEERIMETER_GITHUB_CLIENT_SECRET"`
+	GitHubOrganization          string `env:"PEERIMETER_GITHUB_ORG"`
+	GitHubTeam                  string `env:"PEERIMETER_GITHUB_TEAM"`
+	GitHubDashboardURL          string `env:"PEERIMETER_GITHUB_DASHBOARD_URL"`
+	AuthSessionSecret           string `env:"PEERIMETER_AUTH_SESSION_SECRET"`
 	StorageBackend              string `env:"PEERIMETER_STORAGE_BACKEND" envDefault:"file"`
 	DatabaseURL                 string `env:"PEERIMETER_DATABASE_URL"`
 	DatabaseCACert              string `env:"PEERIMETER_DATABASE_CA_CERT"`
@@ -71,6 +80,28 @@ func Load() (Config, error) {
 	if cfg.StorageBackend != "postgres" && (cfg.DatabaseCACert != "" || cfg.DatabaseAllowSSLModeRequire) {
 		return Config{}, fmt.Errorf("PEERIMETER_DATABASE_CA_CERT and PEERIMETER_DATABASE_ALLOW_SSLMODE_REQUIRE require PEERIMETER_STORAGE_BACKEND=postgres")
 	}
+	if cfg.GitHubSSOEnabled() {
+		if cfg.GitHubClientID == "" || cfg.GitHubClientSecret == "" || cfg.GitHubOrganization == "" || cfg.GitHubTeam == "" || cfg.GitHubDashboardURL == "" || len(cfg.AuthSessionSecret) < 32 {
+			return Config{}, fmt.Errorf("GitHub SSO requires client ID, client secret, organization, team, dashboard URL, and a session secret of at least 32 characters")
+		}
+		if cfg.PublicAPIURL == "" {
+			return Config{}, fmt.Errorf("PEERIMETER_PUBLIC_API_URL must be set when GitHub SSO is enabled")
+		}
+		serviceURL, err := url.Parse(cfg.PublicAPIURL)
+		if err != nil || serviceURL.Scheme != "https" || serviceURL.Host == "" || serviceURL.Path != "" || serviceURL.RawQuery != "" || serviceURL.Fragment != "" {
+			return Config{}, fmt.Errorf("PEERIMETER_PUBLIC_API_URL must be an HTTPS origin without a path when GitHub SSO is enabled")
+		}
+		if !githubSlug.MatchString(cfg.GitHubOrganization) || !githubSlug.MatchString(cfg.GitHubTeam) {
+			return Config{}, fmt.Errorf("GitHub organization and team must be slugs containing only letters, numbers, and hyphens")
+		}
+		dashboardURL, err := url.Parse(cfg.GitHubDashboardURL)
+		if err != nil || dashboardURL.Scheme != "https" || dashboardURL.Host == "" || dashboardURL.Path != "" || dashboardURL.RawQuery != "" || dashboardURL.Fragment != "" {
+			return Config{}, fmt.Errorf("PEERIMETER_GITHUB_DASHBOARD_URL must be an HTTPS origin without a path")
+		}
+	}
+	if cfg.PasswordLogin != "" && cfg.PasswordLogin != "true" && cfg.PasswordLogin != "false" {
+		return Config{}, fmt.Errorf("PEERIMETER_PASSWORD_LOGIN_ENABLED must be true or false")
+	}
 
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		if strings.TrimSpace(raw) == "" {
@@ -81,4 +112,17 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+var githubSlug = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+func (cfg Config) GitHubSSOEnabled() bool {
+	return cfg.GitHubClientID != "" || cfg.GitHubClientSecret != "" || cfg.GitHubOrganization != "" || cfg.GitHubTeam != ""
+}
+
+func (cfg Config) IsPasswordLoginEnabled() bool {
+	if cfg.PasswordLogin != "" {
+		return cfg.PasswordLogin == "true"
+	}
+	return !cfg.GitHubSSOEnabled()
 }

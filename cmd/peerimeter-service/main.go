@@ -34,8 +34,15 @@ func runServer() error {
 	defer closeStore()
 
 	server := &http.Server{
-		Addr:              net.JoinHostPort(cfg.ListenAddr, cfg.Port),
-		Handler:           api.New(cfg.APIKey, cfg.PublicAPIURL, store, logger, cfg.RequireHTTPS, strings.Split(cfg.CORSAllowedOrigins, ",")...),
+		Addr: net.JoinHostPort(cfg.ListenAddr, cfg.Port),
+		Handler: api.NewWithAuth(cfg.APIKey, cfg.PublicAPIURL, store, logger, cfg.RequireHTTPS, api.AuthOptions{
+			PasswordLogin: cfg.IsPasswordLoginEnabled(),
+			GitHub: api.GitHubConfig{
+				ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret,
+				Organization: cfg.GitHubOrganization, Team: cfg.GitHubTeam,
+				DashboardURL: cfg.GitHubDashboardURL, SessionSecret: cfg.AuthSessionSecret,
+			},
+		}, strings.Split(cfg.CORSAllowedOrigins, ",")...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

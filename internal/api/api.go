@@ -41,10 +41,28 @@ type API struct {
 	store          ConfigStore
 	logger         *slog.Logger
 	allowedOrigins map[string]bool
+	auth           *GitHubAuth
+	passwordLogin  bool
+}
+
+type AuthOptions struct {
+	PasswordLogin bool
+	GitHub        GitHubConfig
+	GitHubAuth    *GitHubAuth
 }
 
 func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireHTTPS bool, corsAllowedOrigins ...string) http.Handler {
-	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool)}
+	return NewWithAuth(key, publicURL, store, logger, requireHTTPS, AuthOptions{PasswordLogin: true}, corsAllowedOrigins...)
+}
+
+func NewWithAuth(key, publicURL string, store ConfigStore, logger *slog.Logger, requireHTTPS bool, authOptions AuthOptions, corsAllowedOrigins ...string) http.Handler {
+	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool), passwordLogin: authOptions.PasswordLogin}
+	if authOptions.GitHub.Enabled() {
+		a.auth = authOptions.GitHubAuth
+		if a.auth == nil {
+			a.auth = NewGitHubAuth(authOptions.GitHub)
+		}
+	}
 	for _, raw := range corsAllowedOrigins {
 		if normalized, err := corsorigin.Normalize(raw); err == nil {
 			a.allowedOrigins[normalized] = true
@@ -54,6 +72,10 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 	r.Use(a.cors)
 	r.Get("/healthz", a.liveness)
 	r.Get("/health", a.readiness)
+	r.Get("/api/v1/auth/config", a.getAuthConfig)
+	r.Get("/auth/github/login", a.authGitHubLogin)
+	r.Get("/auth/github/callback", a.authGitHubCallback)
+	r.Post("/api/v1/auth/logout", a.authLogout)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Get("/api/v1/version", a.getVersion)
@@ -71,6 +93,10 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 		r.With(a.authenticateManagement).Delete("/api/v1/networks/{networkID}/nodes/{nodeID}", a.deleteNode)
 	})
 	return r
+}
+
+func (a *API) getAuthConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"password_login_enabled": a.passwordLogin, "github_sso_enabled": a.auth != nil})
 }
 
 func (a *API) getVersion(w http.ResponseWriter, _ *http.Request) {
