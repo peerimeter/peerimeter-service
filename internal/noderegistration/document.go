@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/peerimeter/peerimeter-service/internal/networking"
 )
@@ -56,6 +57,8 @@ func Document(nodeID string, value, metadata json.RawMessage, registrations map[
 	}
 	encodedNodeID, _ := json.Marshal(nodeID)
 	current["node_id"] = encodedNodeID
+	encodedLastActive, _ := json.Marshal(time.Now().UTC().Format(time.RFC3339Nano))
+	current["last_active"] = encodedLastActive
 	return json.Marshal(current)
 }
 
