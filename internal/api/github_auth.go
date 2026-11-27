@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	authCookieName      = "peerimeter_session"
-	authSessionLifetime = 12 * time.Hour
-	authStateLifetime   = 10 * time.Minute
+	authCookieName       = "peerimeter_session"
+	oauthStateCookieName = "peerimeter_oauth_state"
+	authSessionLifetime  = 12 * time.Hour
+	authStateLifetime    = 10 * time.Minute
 )
 
 type GitHubConfig struct {
@@ -38,15 +39,20 @@ type GitHubAuth struct {
 	config   GitHubConfig
 	client   *http.Client
 	mu       sync.Mutex
-	states   map[string]time.Time
+	states   map[string]oauthState
 	sessions map[string]time.Time
+}
+
+type oauthState struct {
+	expires      time.Time
+	browserNonce string
 }
 
 func NewGitHubAuth(config GitHubConfig) *GitHubAuth {
 	return &GitHubAuth{
 		config:   config,
 		client:   &http.Client{Timeout: 8 * time.Second},
-		states:   make(map[string]time.Time),
+		states:   make(map[string]oauthState),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -62,14 +68,21 @@ func (a *API) authGitHubLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
 		return
 	}
+	browserNonce, err := randomToken()
+	if err != nil {
+		a.logger.ErrorContext(r.Context(), "create GitHub OAuth browser nonce", "error", err)
+		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
+		return
+	}
 	a.auth.mu.Lock()
-	for pendingState, expires := range a.auth.states {
-		if time.Now().After(expires) {
+	for pendingState, pending := range a.auth.states {
+		if time.Now().After(pending.expires) {
 			delete(a.auth.states, pendingState)
 		}
 	}
-	a.auth.states[state] = time.Now().Add(authStateLifetime)
+	a.auth.states[state] = oauthState{expires: time.Now().Add(authStateLifetime), browserNonce: browserNonce}
 	a.auth.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookieName, Value: browserNonce, Path: "/auth/github/callback", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(authStateLifetime.Seconds())})
 	query := url.Values{"client_id": {a.auth.config.ClientID}, "redirect_uri": {a.publicURL + "/auth/github/callback"}, "scope": {"read:org"}, "state": {state}}
 	http.Redirect(w, r, "https://github.com/login/oauth/authorize?"+query.Encode(), http.StatusFound)
 }
@@ -79,12 +92,17 @@ func (a *API) authGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	defer clearOAuthStateCookie(w)
 	state := r.URL.Query().Get("state")
+	cookie, cookieErr := r.Cookie(oauthStateCookieName)
 	a.auth.mu.Lock()
-	stateExpiry, found := a.auth.states[state]
-	delete(a.auth.states, state)
+	pending, found := a.auth.states[state]
+	validBrowser := cookieErr == nil && hmac.Equal([]byte(cookie.Value), []byte(pending.browserNonce))
+	if found && validBrowser {
+		delete(a.auth.states, state)
+	}
 	a.auth.mu.Unlock()
-	if !found || time.Now().After(stateExpiry) || r.URL.Query().Get("error") != "" {
+	if !found || !validBrowser || time.Now().After(pending.expires) || r.URL.Query().Get("error") != "" {
 		http.Error(w, "GitHub sign-in was not authorized", http.StatusUnauthorized)
 		return
 	}
@@ -134,8 +152,16 @@ func (a *API) authGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, strings.TrimRight(a.auth.config.DashboardURL, "/"), http.StatusFound)
 }
 
+func clearOAuthStateCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookieName, Value: "", Path: "/auth/github/callback", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+}
+
 func (a *API) authLogout(w http.ResponseWriter, r *http.Request) {
 	if a.auth != nil {
+		if a.auth.validSession(r) && !a.validSessionRequestOrigin(r) {
+			writeError(w, http.StatusForbidden, "untrusted origin")
+			return
+		}
 		if cookie, err := r.Cookie(authCookieName); err == nil {
 			a.auth.mu.Lock()
 			delete(a.auth.sessions, sessionHash(a.auth.config.SessionSecret, cookie.Value))

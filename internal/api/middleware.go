@@ -41,38 +41,64 @@ func (a *API) cors(next http.Handler) http.Handler {
 
 func (a *API) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.auth != nil && a.auth.validSession(r) {
+		if a.validBearerTokenRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if a.auth != nil && a.auth.validSession(r) {
+			if !a.validSessionRequestOrigin(r) {
+				writeError(w, http.StatusForbidden, "untrusted origin")
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	})
+}
+
+func (a *API) validBearerTokenRequest(r *http.Request) bool {
+	provided, ok := bearerToken(r)
+	if !ok || a.key == "" {
+		return false
+	}
+	masterOK := a.passwordLogin && constantTimeEqual(provided, a.key)
+	networkID := requestNetworkID(r)
+	networkOK := networkID != "" && constantTimeEqual(provided, networkToken(a.key, networkID))
+	return masterOK || networkOK
+}
+
+func (a *API) authenticateManagement(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided, ok := bearerToken(r)
-		if !ok || a.key == "" {
+		keyOK := a.passwordLogin && ok && a.key != "" && constantTimeEqual(provided, a.key)
+		if keyOK {
+			next.ServeHTTP(w, r)
+			return
+		}
+		sessionOK := a.auth != nil && a.auth.validSession(r)
+		if !sessionOK {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		masterOK := a.passwordLogin && constantTimeEqual(provided, a.key)
-		networkID := requestNetworkID(r)
-		token := networkToken(a.key, networkID)
-		networkOK := networkID != "" && constantTimeEqual(provided, token)
-		if !masterOK && !networkOK {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+		if !a.validSessionRequestOrigin(r) {
+			writeError(w, http.StatusForbidden, "untrusted origin")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (a *API) authenticateManagement(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided, ok := bearerToken(r)
-		sessionOK := a.auth != nil && a.auth.validSession(r)
-		keyOK := a.passwordLogin && ok && a.key != "" && constantTimeEqual(provided, a.key)
-		if !sessionOK && !keyOK {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func (a *API) validSessionRequestOrigin(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	requestOrigin, err := corsorigin.Normalize(r.Header.Get("Origin"))
+	if err != nil {
+		return false
+	}
+	trustedOrigin, err := corsorigin.Normalize(a.auth.config.DashboardURL)
+	return err == nil && requestOrigin == trustedOrigin
 }
 
 func bearerToken(r *http.Request) (string, bool) {

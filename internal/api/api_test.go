@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -169,6 +170,93 @@ func TestGitHubSessionAuthorizesAPIWithoutAPIKey(t *testing.T) {
 	handler.ServeHTTP(response, apiRequest)
 	if response.Code != http.StatusOK {
 		t.Fatalf("GitHub session status = %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestGitHubSessionRequiresTrustedOriginForWrites(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	githubConfig := GitHubConfig{ClientID: "client", SessionSecret: "session-secret", DashboardURL: "https://dashboard.example"}
+	auth := NewGitHubAuth(githubConfig)
+	const sessionID = "test-session"
+	auth.sessions[sessionHash(githubConfig.SessionSecret, sessionID)] = time.Now().Add(time.Hour)
+	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{PasswordLogin: true, GitHub: githubConfig, GitHubAuth: auth}, "https://dashboard.example")
+	createNetwork := func(origin string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/networks", strings.NewReader(`{"version":1,"id":"net-a","name":"mesh","cidr":"10.90.0.0/24"}`))
+		request.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := createNetwork(""); response.Code != http.StatusForbidden {
+		t.Fatalf("session write without Origin = %d, want 403", response.Code)
+	}
+	if response := createNetwork("https://untrusted.example"); response.Code != http.StatusForbidden {
+		t.Fatalf("session write from untrusted origin = %d, want 403", response.Code)
+	}
+	if response := createNetwork("https://dashboard.example"); response.Code != http.StatusCreated {
+		t.Fatalf("session write from dashboard origin = %d: %s", response.Code, response.Body)
+	}
+	requestWithBearer := httptest.NewRequest(http.MethodPut, "/api/v1/networks/net-a/config", strings.NewReader(`{"version":1,"name":"mesh"}`))
+	requestWithBearer.Header.Set("Authorization", "Bearer test-static-key")
+	requestWithBearer.Header.Set("Origin", "https://untrusted.example")
+	requestWithBearer.AddCookie(&http.Cookie{Name: authCookieName, Value: sessionID})
+	bearerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(bearerResponse, requestWithBearer)
+	if bearerResponse.Code != http.StatusNoContent {
+		t.Fatalf("bearer-authenticated write with session cookie = %d, want 204: %s", bearerResponse.Code, bearerResponse.Body)
+	}
+}
+
+func TestOAuthStateIsBoundToStartingBrowser(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "config.json"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	githubConfig := GitHubConfig{ClientID: "client", SessionSecret: "session-secret", DashboardURL: "https://dashboard.example"}
+	auth := NewGitHubAuth(githubConfig)
+	handler := NewWithAuth("test-static-key", "https://service.example", store, slog.New(slog.NewJSONHandler(io.Discard, nil)), true, AuthOptions{GitHub: githubConfig, GitHubAuth: auth})
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/auth/github/login", nil))
+	if login.Code != http.StatusFound {
+		t.Fatalf("login status = %d", login.Code)
+	}
+	state := login.Result().Header.Get("Location")
+	parsedLocation, err := url.Parse(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = parsedLocation.Query().Get("state")
+	stateCookie := login.Result().Cookies()[0]
+	if state == "" || stateCookie.Name != oauthStateCookieName {
+		t.Fatalf("OAuth state or browser cookie missing: state=%q cookie=%v", state, stateCookie)
+	}
+	callbackURL := "/auth/github/callback?state=" + url.QueryEscape(state) + "&error=access_denied"
+	callbackWithoutCookie := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, callbackWithoutCookie)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("callback without browser cookie = %d, want 401", response.Code)
+	}
+	if _, exists := auth.states[state]; !exists {
+		t.Fatal("state was consumed by callback from the wrong browser")
+	}
+	callbackFromOriginalBrowser := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	callbackFromOriginalBrowser.AddCookie(stateCookie)
+	originalResponse := httptest.NewRecorder()
+	handler.ServeHTTP(originalResponse, callbackFromOriginalBrowser)
+	if originalResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("denied callback status = %d, want 401", originalResponse.Code)
+	}
+	if _, exists := auth.states[state]; exists {
+		t.Fatal("valid browser callback did not consume state")
 	}
 }
 
