@@ -406,7 +406,8 @@ When GitHub SSO is enabled, the service checks active membership in the
 configured organization team. Sessions are held in memory for 12 hours and are
 revoked at logout or service restart. Use HTTPS and configure the dashboard
 origin in `PEERIMETER_CORS_ALLOWED_ORIGINS` when the dashboard has a separate
-origin.
+origin. Cookie-authenticated write requests are also restricted to the
+configured `PEERIMETER_GITHUB_DASHBOARD_URL` origin.
 Rotating the key invalidates existing join bundles and enrollment tokens, so
 issue fresh bundles to agents that should remain connected.
 
