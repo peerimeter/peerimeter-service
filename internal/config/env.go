@@ -99,6 +99,9 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("PEERIMETER_GITHUB_DASHBOARD_URL must be an HTTPS origin without a path")
 		}
 	}
+	if cfg.AuthSessionSecret != "" && len(cfg.AuthSessionSecret) < 32 {
+		return Config{}, fmt.Errorf("PEERIMETER_AUTH_SESSION_SECRET must contain at least 32 characters")
+	}
 	if cfg.PasswordLogin != "" && cfg.PasswordLogin != "true" && cfg.PasswordLogin != "false" {
 		return Config{}, fmt.Errorf("PEERIMETER_PASSWORD_LOGIN_ENABLED must be true or false")
 	}

@@ -5,13 +5,13 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -36,24 +36,20 @@ func (c GitHubConfig) Enabled() bool {
 }
 
 type GitHubAuth struct {
-	config   GitHubConfig
-	client   *http.Client
-	mu       sync.Mutex
-	states   map[string]oauthState
-	sessions map[string]time.Time
+	config GitHubConfig
+	client *http.Client
 }
 
-type oauthState struct {
-	expires      time.Time
-	browserNonce string
+type sessionClaims struct {
+	Username   string `json:"username"`
+	AuthMethod string `json:"auth_method"`
+	ExpiresAt  int64  `json:"expires_at"`
 }
 
 func NewGitHubAuth(config GitHubConfig) *GitHubAuth {
 	return &GitHubAuth{
-		config:   config,
-		client:   &http.Client{Timeout: 8 * time.Second},
-		states:   make(map[string]oauthState),
-		sessions: make(map[string]time.Time),
+		config: config,
+		client: &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
@@ -62,26 +58,18 @@ func (a *API) authGitHubLogin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	state, err := randomToken()
+	browserNonce, err := randomToken()
 	if err != nil {
 		a.logger.ErrorContext(r.Context(), "create GitHub OAuth state", "error", err)
 		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
 		return
 	}
-	browserNonce, err := randomToken()
+	state, err := signPayload(a.sessionSecret, "peerimeter-github-state-v1", oauthStateClaims{Nonce: browserNonce, ExpiresAt: time.Now().Add(authStateLifetime).Unix()})
 	if err != nil {
-		a.logger.ErrorContext(r.Context(), "create GitHub OAuth browser nonce", "error", err)
+		a.logger.ErrorContext(r.Context(), "sign GitHub OAuth state", "error", err)
 		http.Error(w, "authentication unavailable", http.StatusInternalServerError)
 		return
 	}
-	a.auth.mu.Lock()
-	for pendingState, pending := range a.auth.states {
-		if time.Now().After(pending.expires) {
-			delete(a.auth.states, pendingState)
-		}
-	}
-	a.auth.states[state] = oauthState{expires: time.Now().Add(authStateLifetime), browserNonce: browserNonce}
-	a.auth.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: oauthStateCookieName, Value: browserNonce, Path: "/auth/github/callback", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(authStateLifetime.Seconds())})
 	query := url.Values{"client_id": {a.auth.config.ClientID}, "redirect_uri": {a.publicURL + "/auth/github/callback"}, "scope": {"read:org"}, "state": {state}}
 	http.Redirect(w, r, "https://github.com/login/oauth/authorize?"+query.Encode(), http.StatusFound)
@@ -95,14 +83,10 @@ func (a *API) authGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	defer clearOAuthStateCookie(w)
 	state := r.URL.Query().Get("state")
 	cookie, cookieErr := r.Cookie(oauthStateCookieName)
-	a.auth.mu.Lock()
-	pending, found := a.auth.states[state]
-	validBrowser := cookieErr == nil && hmac.Equal([]byte(cookie.Value), []byte(pending.browserNonce))
-	if found && validBrowser {
-		delete(a.auth.states, state)
-	}
-	a.auth.mu.Unlock()
-	if !found || !validBrowser || time.Now().After(pending.expires) || r.URL.Query().Get("error") != "" {
+	var pending oauthStateClaims
+	validState := verifyPayload(a.sessionSecret, "peerimeter-github-state-v1", state, &pending) == nil
+	validBrowser := cookieErr == nil && hmac.Equal([]byte(cookie.Value), []byte(pending.Nonce))
+	if !validState || !validBrowser || time.Now().Unix() >= pending.ExpiresAt || r.URL.Query().Get("error") != "" {
 		http.Error(w, "GitHub sign-in was not authorized", http.StatusUnauthorized)
 		return
 	}
@@ -135,20 +119,12 @@ func (a *API) authGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "your GitHub account is not in the authorized team", http.StatusForbidden)
 		return
 	}
-	sessionID, err := randomToken()
-	if err != nil {
+	claims := sessionClaims{Username: username, AuthMethod: "github", ExpiresAt: time.Now().Add(authSessionLifetime).Unix()}
+	if err := a.setSessionCookie(w, claims); err != nil {
+		a.logger.ErrorContext(r.Context(), "sign GitHub session", "error", err)
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
-	a.auth.mu.Lock()
-	a.auth.sessions[sessionHash(a.auth.config.SessionSecret, sessionID)] = time.Now().Add(authSessionLifetime)
-	a.auth.mu.Unlock()
-	secure := strings.HasPrefix(a.publicURL, "https://")
-	sameSite := http.SameSiteLaxMode
-	if secure {
-		sameSite = http.SameSiteNoneMode
-	}
-	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: sessionID, Path: "/", HttpOnly: true, Secure: secure, SameSite: sameSite, Expires: time.Now().Add(authSessionLifetime), MaxAge: int(authSessionLifetime.Seconds())})
 	http.Redirect(w, r, strings.TrimRight(a.auth.config.DashboardURL, "/"), http.StatusFound)
 }
 
@@ -157,35 +133,88 @@ func clearOAuthStateCookie(w http.ResponseWriter) {
 }
 
 func (a *API) authLogout(w http.ResponseWriter, r *http.Request) {
-	if a.auth != nil {
-		if a.auth.validSession(r) && !a.validSessionRequestOrigin(r) {
+	if a.sessionClaimsValid(r) {
+		if !a.validSessionRequestOrigin(r) {
 			writeError(w, http.StatusForbidden, "untrusted origin")
 			return
-		}
-		if cookie, err := r.Cookie(authCookieName); err == nil {
-			a.auth.mu.Lock()
-			delete(a.auth.sessions, sessionHash(a.auth.config.SessionSecret, cookie.Value))
-			a.auth.mu.Unlock()
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: "", Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.publicURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *GitHubAuth) validSession(r *http.Request) bool {
+func (a *API) sessionClaimsValid(r *http.Request) bool {
+	_, ok := a.sessionClaims(r)
+	return ok
+}
+
+func (a *API) sessionClaims(r *http.Request) (sessionClaims, bool) {
 	cookie, err := r.Cookie(authCookieName)
 	if err != nil || cookie.Value == "" {
-		return false
+		return sessionClaims{}, false
 	}
-	key := sessionHash(a.config.SessionSecret, cookie.Value)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	expires, ok := a.sessions[key]
-	if ok && time.Now().After(expires) {
-		delete(a.sessions, key)
-		return false
+	var claims sessionClaims
+	if err := verifyPayload(a.sessionSecret, "peerimeter-session-v1", cookie.Value, &claims); err != nil || claims.Username == "" || (claims.AuthMethod != "github" && claims.AuthMethod != "api_key") || time.Now().Unix() >= claims.ExpiresAt {
+		return sessionClaims{}, false
 	}
-	return ok
+	return claims, true
+}
+
+func (a *API) setSessionCookie(w http.ResponseWriter, claims sessionClaims) error {
+	value, err := signPayload(a.sessionSecret, "peerimeter-session-v1", claims)
+	if err != nil {
+		return err
+	}
+	secure := strings.HasPrefix(a.publicURL, "https://")
+	sameSite := http.SameSiteLaxMode
+	if secure {
+		sameSite = http.SameSiteNoneMode
+	}
+	http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: value, Path: "/", HttpOnly: true, Secure: secure, SameSite: sameSite, Expires: time.Unix(claims.ExpiresAt, 0), MaxAge: int(time.Until(time.Unix(claims.ExpiresAt, 0)).Seconds())})
+	return nil
+}
+
+type oauthStateClaims struct {
+	Nonce     string `json:"nonce"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+func signPayload(secret, purpose string, payload any) (string, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	body := base64.RawURLEncoding.EncodeToString(encoded)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(purpose + "\x00" + body))
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func verifyPayload(secret, purpose, token string, destination any) error {
+	body, signature, ok := strings.Cut(token, ".")
+	if !ok {
+		return fmt.Errorf("malformed token")
+	}
+	provided, err := base64.RawURLEncoding.DecodeString(signature)
+	if err != nil {
+		return err
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(purpose + "\x00" + body))
+	if !hmac.Equal(provided, mac.Sum(nil)) {
+		return fmt.Errorf("invalid token signature")
+	}
+	encoded, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, destination)
+}
+
+func deriveSessionSecret(key string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("peerimeter-session-cookie-v1"))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func (a *GitHubAuth) exchangeCode(ctx context.Context, code string) (string, error) {
@@ -274,11 +303,4 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(value), nil
-}
-
-func sessionHash(secret, sessionID string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(sessionID))
-	hash := mac.Sum(nil)
-	return hex.EncodeToString(hash[:])
 }

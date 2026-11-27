@@ -43,10 +43,12 @@ type API struct {
 	allowedOrigins map[string]bool
 	auth           *GitHubAuth
 	passwordLogin  bool
+	sessionSecret  string
 }
 
 type AuthOptions struct {
 	PasswordLogin bool
+	SessionSecret string
 	GitHub        GitHubConfig
 	GitHubAuth    *GitHubAuth
 }
@@ -56,7 +58,14 @@ func New(key, publicURL string, store ConfigStore, logger *slog.Logger, requireH
 }
 
 func NewWithAuth(key, publicURL string, store ConfigStore, logger *slog.Logger, requireHTTPS bool, authOptions AuthOptions, corsAllowedOrigins ...string) http.Handler {
-	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool), passwordLogin: authOptions.PasswordLogin}
+	sessionSecret := authOptions.SessionSecret
+	if sessionSecret == "" {
+		sessionSecret = authOptions.GitHub.SessionSecret
+	}
+	if sessionSecret == "" {
+		sessionSecret = deriveSessionSecret(key)
+	}
+	a := &API{key: key, publicURL: strings.TrimRight(publicURL, "/"), requireHTTPS: requireHTTPS, store: store, logger: logger, allowedOrigins: make(map[string]bool), passwordLogin: authOptions.PasswordLogin, sessionSecret: sessionSecret}
 	if authOptions.GitHub.Enabled() {
 		a.auth = authOptions.GitHubAuth
 		if a.auth == nil {
@@ -73,6 +82,8 @@ func NewWithAuth(key, publicURL string, store ConfigStore, logger *slog.Logger, 
 	r.Get("/healthz", a.liveness)
 	r.Get("/health", a.readiness)
 	r.Get("/api/v1/auth/config", a.getAuthConfig)
+	r.Post("/api/v1/auth/login", a.authAPIKeyLogin)
+	r.Get("/api/v1/auth/session", a.getAuthSession)
 	r.Get("/auth/github/login", a.authGitHubLogin)
 	r.Get("/auth/github/callback", a.authGitHubCallback)
 	r.Post("/api/v1/auth/logout", a.authLogout)
@@ -97,6 +108,40 @@ func NewWithAuth(key, publicURL string, store ConfigStore, logger *slog.Logger, 
 
 func (a *API) getAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"password_login_enabled": a.passwordLogin, "github_sso_enabled": a.auth != nil})
+}
+
+func (a *API) authAPIKeyLogin(w http.ResponseWriter, r *http.Request) {
+	if !a.passwordLogin {
+		writeError(w, http.StatusForbidden, "password login is disabled")
+		return
+	}
+	var request struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil || !constantTimeEqual(request.APIKey, a.key) {
+		writeError(w, http.StatusUnauthorized, "invalid API key")
+		return
+	}
+	claims := sessionClaims{Username: "superadmin", AuthMethod: "api_key", ExpiresAt: time.Now().Add(authSessionLifetime).Unix()}
+	if err := a.setSessionCookie(w, claims); err != nil {
+		a.logger.ErrorContext(r.Context(), "create API key session", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	writeJSON(w, http.StatusOK, claims)
+}
+
+func (a *API) getAuthSession(w http.ResponseWriter, r *http.Request) {
+	claims, ok := a.sessionClaims(r)
+	if ok {
+		writeJSON(w, http.StatusOK, claims)
+		return
+	}
+	if a.validBearerTokenRequest(r) && a.passwordLogin {
+		writeJSON(w, http.StatusOK, sessionClaims{Username: "superadmin", AuthMethod: "api_key"})
+		return
+	}
+	writeError(w, http.StatusUnauthorized, "unauthorized")
 }
 
 func (a *API) getVersion(w http.ResponseWriter, _ *http.Request) {
